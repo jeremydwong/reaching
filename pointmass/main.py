@@ -1,17 +1,11 @@
 '''
-    This script formulates and solves a trajectory optimization problem
-    underlying a predictive simulation of walking with a planar five-link
-    biped model. A direct collocation method with a backward Euler
-    integration scheme is employed to formulate a nonlinear program (NLP)
-    from the continuous optimal control problem.
-    
-    The formulation is deeply inspired from the five-link biped example 
-    described in: "Kelly, An Introduction to Trajectory Optimization:
-    How to do your own direct collocation (2017), SIAM REVIEW.
-    DOI. 10.1137/16M1062569".
-    
-    Author: Tom Van Wouwe
-    Contributors: Antoine Falisse and Gil Serrancoli
+Modified from the ISB-collocation code, here we simplify 
+by going back to a point mass.
+tasks
+- optimize movement time
+- add force-rate cost
+- add slack variable 
+- consider collocation (rather than transcription)
 '''
 
 import casadi as ca
@@ -36,17 +30,14 @@ you run the code. Feel free to adjust the variables below accordingly.
 generate_animation = False
 generate_plots = True
 
-# %% Selection of weight of the cost function terms.
 # %% Model: physical parameters.
-
 # Mass of the segments.
-m1 = 3.2
-# Rotational inertia of the segments.
+m1 = 1
 # Length of the segments.
 l1 = 0.4
 l2 = 0.4
 
-# %% Model: dynamics.
+# %% Model: dynamics written implicitly.
 f_getModelConstraintErrors = getModelConstraintErrors(
     m1,
     l1, l2)
@@ -88,7 +79,14 @@ ddq1 = opti.variable(1,N)
 ddq2 = opti.variable(1,N)   
 # Joint torques.
 T1 = opti.variable(1,N)
-T2 = opti.variable(1,N)  
+T2 = opti.variable(1,N)
+# Frate
+dT1 = opti.variable(1,N)
+dT2 = opti.variable(1,N)
+# Fraterate
+ddT1 = opti.variable(1,N)
+ddT2 = opti.variable(1,N)
+
 
 # Set bounds on segment angles (if not otherwise specified, design
 # variables will be bounded between +/- Inf).
@@ -150,10 +148,24 @@ for k in range(N):
     Uk_plus = ca.vertcat(dq1k_plus, dq2k_plus, 
           ddq1k_plus, ddq2k_plus)
     
-    
+
     # Path constraints - dynamic constraints.
     opti.subject_to(eulerIntegrator(Xk, Xk_plus, Uk_plus, dt) == 0)
-       
+
+    if k < (N-1):
+        # Stack force rate
+        # Stack force rate
+        ddT1k_plus = ddT1[:,k]
+        ddT2k_plus = ddT2[:,k]
+        torquesK = ca.vertcat(T1k_plus,T2k_plus)
+        torquesK_pp = ca.vertcat(T1[:,k+1],T2[:,k+1])
+        dtorquesK = ca.vertcat(dT1[:,k],dT2[:,k])
+        dtorquesK_pp = ca.vertcat(dT1[:,k+1],dT2[:,k+1])
+        #ddtorquesK = ca.vertcat(ddT1k_plus,ddT2k_plus)
+        ddtorquesK_pp = ca.vertcat(ddT1[:,k+1],ddT2[:,k+1])
+        opti.subject_to(eulerIntegrator(torquesK, torquesK_pp, dtorquesK_pp, dt) == 0)
+        opti.subject_to(eulerIntegrator(dtorquesK, dtorquesK_pp, ddtorquesK_pp, dt) == 0)
+          
     # Path constraints - model constraints (implicit skelton dynamics).
     # We impose this error to be null (i.e., f(q, dq, ddq, T) = 0).
     modelConstraintErrors = f_getModelConstraintErrors(
@@ -163,16 +175,11 @@ for k in range(N):
         T1k_plus,T2k_plus)
     opti.subject_to(ca.vertcat(*modelConstraintErrors) == 0)
     
-    # We do not have any other path constraints. but here we could do it.
-    # getJointPositions returns 'joint' positions in the x-y plane in the
-    # following order: stance knee (X-Y), pelvis (X-Y), head (X-Y), 
-    # swing knee (X-Y), and swing foot (X-Y).
-    #jointPositions = getJointPositions(l1,l2,q1k,q2k)
-    #opti.subject_to(jointPositions[9] > -1e-4)
-    
     # Cost function.
     # Minimize the weighted sum of the squared joint torques.
-    J = J + (T1k_plus**2 + T2k_plus**2)*dt
+    #J = J + (T1k_plus**2 + T2k_plus**2)*dt
+    # now we try to minimize force-rate-rate.
+    J = J + (ddT1k_plus**2 + ddT2k_plus**2)*dt
     # Penalize (with low weight) segment angular accelerations for
     # regularization purposes.
         
