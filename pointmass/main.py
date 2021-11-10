@@ -6,6 +6,8 @@ tasks
 - add force-rate cost
 - add slack variable 
 - consider collocation (rather than transcription)
+
+this code is based upon Wouw and Falisse's ASB tutorial on collocation. 
 '''
 
 import casadi as ca
