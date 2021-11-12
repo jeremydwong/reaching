@@ -12,7 +12,7 @@ import casadi as ca
 from getModelConstraintErrors import getModelConstraintErrors
 from Integrators import eulerIntegrator
 import matplotlib.pyplot as plt
-
+import getJointKinematics as jk
 
 N = 50 # number of control intervals
 opti = ca.Opti() # optimization problem
@@ -23,8 +23,8 @@ l1  =  0.3            # upper arm
 l2  =  0.3            # lower arm
 m1 = 1               # upper arm mass
 m2 = 1               # lower arm mass
-i1 = 1/12*m1*(l1/2)**2
-i2 = 1/12*m1*(l2/2)**2
+i1 = 1/12*m1*(l1)**2
+i2 = 1/12*m1*(l2)**2
 
 # % Model: dynamics written implicitly.
 f_getModelConstraintErrors = getModelConstraintErrors(
@@ -42,8 +42,8 @@ q2dotdot = q[5,:] # ddq2t2
 
 tauSho = q[6,:] #shoulder torque
 tauElb = q[7,:] #elbow torque
-dT1 = q[8,:] #shoulder torque d/dt
-dT2 = q[9,:] #elbow torque d/dt
+dtau1 = q[8,:] #shoulder torque d/dt
+dtau2 = q[9,:] #elbow torque d/dt
 
 ddtau1 = u[0,:] # shoulder frr
 ddtau2 = u[1,:] # elb frr
@@ -94,7 +94,7 @@ coefMargaria = 4.8
 coefFR = 5e-2
 J = 0      
 for k in range(1,N):
-    J = J + (pSho[:,k] +pSho[:,k-1])/2*dt + (pElb[:,k] +pElb[:,k-1])/2*dt + coefFR*((pddT1[:,k]+pddT1[:,k-1])/2)*dt + ((pddT2[:,k]+pddT2[:,k-1])/2)*dt
+    J = J + coefMargaria*(pSho[:,k] +pSho[:,k-1])/2*dt + (pElb[:,k] +pElb[:,k-1])/2*dt + coefFR*((pddT1[:,k]+pddT1[:,k-1])/2)*dt + ((pddT2[:,k]+pddT2[:,k-1])/2)*dt
 
 opti.subject_to(pSho >= 0.0)
 opti.subject_to(pElb >= 0.0)
@@ -114,19 +114,26 @@ opti.subject_to(q2[-1] == 0.1+25/180*np.pi)
 
 opti.subject_to(q1dot[0] == 0.0)
 opti.subject_to(q2dot[0] == 0.0)
-opti.subject_to(q1dotdot[0] == 0.0)
-opti.subject_to(q2dotdot[0] == 0.0)
-
 opti.subject_to(q1dot[-1] == 0.0)
 opti.subject_to(q2dot[-1] == 0.0)
+
+opti.subject_to(q1dotdot[0] == 0.0)
+opti.subject_to(q2dotdot[0] == 0.0)
 opti.subject_to(q1dotdot[-1] == 0.0)
 opti.subject_to(q2dotdot[-1] == 0.0)
 
+opti.subject_to(tauSho[0] == 0.0)
+opti.subject_to(tauElb[0] == 0.0)
 opti.subject_to(tauSho[-1] == 0.0)
 opti.subject_to(tauElb[-1] == 0.0)
-
-#opti.subject_to(dT1[0] == 0.0)
-#opti.subject_to(dT2[0] == 0.0)
+opti.subject_to(dtau1[0] == 0.0)
+opti.subject_to(dtau2[0] == 0.0)
+opti.subject_to(ddtau1[0] == 0.0)
+opti.subject_to(ddtau2[0] == 0.0)
+opti.subject_to(dtau1[-1] == 0.0)
+opti.subject_to(dtau2[-1] == 0.0)
+opti.subject_to(ddtau1[-1] == 0.0)
+opti.subject_to(ddtau2[-1] == 0.0)
 
 
 # ---- solve NLP -------------------
@@ -136,7 +143,7 @@ sol = opti.solve()   # actual solve
 print("complete")
 
 from matplotlib import pyplot as plt
-#%%
+#% plot the results
 
 time = np.linspace(0,TFinal,N+1)
 plt.figure()
@@ -152,29 +159,29 @@ plt.xlabel("time [s]")
 
 q1_sol = sol.value(q1)
 q2_sol = sol.value(q2)
+q_sol = sol.value(q[:2,:])
+dqdt_sol = sol.value(q[2:4,:])
+
 q1dot_sol = sol.value(q1dot)
 q2dot_sol = sol.value(q2dot)
 
 tv = np.ndarray([len(q1_sol)]) 
 hv = np.ndarray([2,len(q1_sol)]) 
 for i in range(0,len(q1_sol)):
-    J = np.matrix([[-l1*np.sin(q1_sol[i]), -l2*np.sin(q2_sol[i])],[l1*np.cos(q1_sol[i]), l2*np.cos(q2_sol[i])]])
+    Jac = np.matrix([[-l1*np.sin(q1_sol[i]), -l2*np.sin(q2_sol[i])],[l1*np.cos(q1_sol[i]), l2*np.cos(q2_sol[i])]])
     dqdt = np.matrix([[q1dot_sol[i]],[q2dot_sol[i]]])
-    temp = J*dqdt
+    temp = Jac*dqdt
     hv[0,i] = temp[0,0] 
     hv[1,i] = temp[1,0] 
     tv[i] = np.sqrt(hv[0,i]**2+hv[1,i]**2)
-# %%
+
+tvs = np.ndarray([1,dqdt_sol.shape[1]])
+for i in range(0,q_sol.shape[1]):
+    tvs[:,i] = jk.handSpeed(q_sol[:,i],dqdt_sol[:,i],l1,l2) 
+
 plt.figure()
-plt.plot(time,tv)
+plt.plot(time,np.transpose(tvs))
 plt.xlabel("time [s]")
 plt.ylabel("hand speed [m/s]")
-# ---- construct time vector --------------
-#figure()
-#spy(sol.value(jacobian(opti.g,opti.x)))
-#figure()
-#spy(sol.value(hessian(opti.f+dot(opti.lam_g,opti.g),opti.x)[0]))
-
-#show()
 
 # %%
