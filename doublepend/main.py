@@ -14,7 +14,7 @@ from Integrators import eulerIntegrator
 import matplotlib.pyplot as plt
 import getJointKinematics as jk
 
-N = 50 # number of control intervals
+N = 40 # number of control intervals
 opti = ca.Opti() # optimization problem
 
 # ---- problem parameters ---------
@@ -91,11 +91,12 @@ opti.subject_to(pddT2 >= ddtau2)
 
 # compute objective
 coefMargaria = 4.8
-coefFR = 5e-2
+coefFR = 5e-3 
 J = 0      
 for k in range(1,N):
     J = J + coefMargaria*(pSho[:,k] +pSho[:,k-1])/2*dt + (pElb[:,k] +pElb[:,k-1])/2*dt + coefFR*((pddT1[:,k]+pddT1[:,k-1])/2)*dt + ((pddT2[:,k]+pddT2[:,k-1])/2)*dt
 
+#slack constraints
 opti.subject_to(pSho >= 0.0)
 opti.subject_to(pElb >= 0.0)
 opti.subject_to(pddT1 >= 0.0)

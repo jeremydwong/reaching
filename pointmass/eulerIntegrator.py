@@ -10,5 +10,6 @@ error = (x(t+1) - x(t)) - u(t+1)dt.
 '''
 
 def eulerIntegrator(x,xplus,uplus,dt):
-
+    #xdot = (xp-x)/dt
     return (xplus - x) - uplus*dt
+

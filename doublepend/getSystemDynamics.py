@@ -24,6 +24,7 @@ def getSystemDynamics(q1,q2,
     F1 = -l1*q2dot**2*sin(q1 - q2)*(d2*m2 + l2*mHand)
     F2 = l1*q1dot**2*sin(q1 - q2)*(d2*m2 + l2*mHand)
         
+        # m * a - f Newton implicit
     e1 = m11*ddq1 + m12*ddq2 - F1 - T1 + T2
     e2 = m21*ddq1 + m22*ddq2 - F2 - T2
 

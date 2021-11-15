@@ -14,6 +14,7 @@ import casadi as ca
 
 import numpy as np
 import matplotlib.pyplot as plt
+from numpy.core.function_base import linspace
 import pygsheets
 
 from getModelConstraintErrors import getModelConstraintErrors
@@ -89,7 +90,6 @@ dT2 = opti.variable(1,N+1)
 # Fraterate
 ddT1 = opti.variable(1,N)
 ddT2 = opti.variable(1,N)
-
 
 # Set bounds on segment angles (if not otherwise specified, design
 # variables will be bounded between +/- Inf).
@@ -181,7 +181,7 @@ for k in range(N):
 
 J = 0.0
 for k in range(1,N):
-    J = J + ((ddT1[k]+ddT1[k-1])/2)**2 *dt + ((ddT2[k]+ddT2[k-1])/2)**2 *dt
+    J = J + ((dT1[k]+dT1[k-1])/2)**2 *dt + ((dT2[k]+dT2[k-1])/2)**2 *dt
     # Penalize (with low weight) segment angular accelerations for
     # regularization purposes.
         
@@ -288,7 +288,7 @@ if generate_plots:
     lineObjects = ax.plot(time[:-1],ddT1_opt,
                           time[:-1],ddT2_opt)
     plt.xlabel('Time [s]')
-    plt.ylabel('force rate')
+    plt.ylabel('force rate rate [N/s^2]')
     plt.legend(iter(lineObjects), ('x','y'))
     plt.draw()
 
