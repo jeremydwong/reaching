@@ -1,6 +1,7 @@
 #Double Pendlum Class
 from calendar import c
-import struct
+from http.cookies import SimpleCookie
+from typing import Callable
 import numpy as np
 import casadi as ca
 import scipy.integrate as integ
@@ -8,6 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from numpy.core.function_base import linspace
 import pygsheets
+import SimpleOpt as so
 
 class Struct:
   def __init__(self, *args, prefix='arg'): # constructor
@@ -27,22 +29,85 @@ class Struct:
       setattr(self, name, val)
 
 class doublePendulum:
+  DoF = 2
+  NActuators = 2
   l = np.array([.3,.3])
   d = np.array([0.15,0.15])
-  I = np.array([1/12.0, 1/12.0])
-  m = np.array([2.1, 1.65, 0.0])
+  I = np.array([1/12.0, 1/12.0, 0.0 ]) # hand mass default zero rotational inertia
+  m = np.array([2.1, 1.65, 0.0])       # hand mass default zero mass
   g= 0.0
 
 
   def handspeed(self, q, qdot):
-    l1 = self.l[0]
-    l2 = self.l[1]
-    Kinjac = np.array([[ -l1*np.sin(q[0]), -l2*np.sin(q[1])],\
-        [l1*np.cos(q[0]),  l2*np.cos(q[1])]])
-    hvel = Kinjac @ qdot
+    hvel = self.kinematicJacobianEndpoint(q) @ qdot
     htan = np.sqrt(hvel[0]**2+hvel[1]**2)
     return htan, hvel
-      
+  
+  def jointPower(self,qdot, u):
+    return ca.vertcat(qdot[0:1,:]*u[0:1,:], qdot[1:2,:]*u[1:2,:]-qdot[0:1,:]*u[1:2,:])
+
+  def kinematicJacobianEndpoint(self, q):
+    l1 = self.l[0]
+    l2 = self.l[1]
+    kinJac = np.array([[ -l1*np.sin(q[0]), -l2*np.sin(q[1])],\
+        [l1*np.cos(q[0]),  l2*np.cos(q[1])]])
+    return kinJac
+  
+  def kinematicJacobianInertias(self, q):
+    j_uarm = np.array([[-self.d[0]*ca.sin(q[0]), 0],[self.d[0]*ca.cos(q[0]), 0]])
+    j_larm = np.array([[-self.l[0]*ca.sin(q[0]), -self.d[1]*ca.sin(q[1])],[self.l[0]*ca.cos(q[0]),  self.d[1]*ca.cos(q[1])]])
+    j_hand = np.array([[-self.l[0]*ca.sin(q[0]), -self.l[1]*ca.sin(q[1])],[ self.l[0]*ca.cos(q[0]),  self.l[1]*ca.cos(q[1])]])
+    
+    return [j_uarm, j_larm, j_hand]
+  
+  def kinematicJacobianRotationalInertias(self,q):
+    r0 = np.array([[1,0],[0,0]])
+    r1 = np.array([[0,1],[0,0]])
+    r2 = np.array([[0,0],[0,0]])
+    return [r0,r1,r2]
+
+  def heightsMasses(self,theQ):
+    g0 = self.d[0]*ca.sin(theQ[0])*self.m[0]*self.g
+    g1 = self.l[0]*ca.sin(theQ[0]) + self.d[1]*ca.sin(theQ[1])*self.m[1]*self.g
+    g2 = self.l[0]*ca.sin(theQ[0]) + self.l[1]*ca.sin(theQ[1])*self.m[2]*self.g
+    
+    return np.array([g0,g1,g2])
+
+  def energy(self, theQ, theQDot, theU, theT):
+    
+    nT = theQ.shape[1]
+    
+    # mecahnical power
+    eDot_mech = self.jointPower(theQDot,theU)
+    t = theT.reshape([1,-1])
+    e_mechAll = integ.cumulative_trapezoid(eDot_mech,x = t,initial=0) #axis = -1 by default, the last axis [which is true], initial keeps shape same.
+    e_mech = e_mechAll[0:1,:]+e_mechAll[1:2,:]
+    
+    # gravitational work
+    e_g = np.zeros([1,theQ.shape[1]])
+    for it in np.arange(0,theQ.shape[1]):
+      heights = self.heightsMasses(theQ[:,it])
+      for ih in np.arange(0,len(heights)):
+        e_g[0,it] = e_g[0,it] + self.m[ih]*self.g*heights[ih]
+    e_g = e_g - e_g[0] # subtract initial
+
+    # kinetic energy
+    e_k = np.zeros([1,theQ.shape[1]])
+    for it in np.arange(0,theQ.shape[1]):
+      linjac = self.kinematicJacobianInertias(theQ[:,it])
+      rotjac = self.kinematicJacobianRotationalInertias(theQ[:,it])
+      for ij in np.arange(0,len(linjac)):
+        vt = linjac[ij] @ theQDot[:,it]
+        angvt = rotjac[ij] @ theQDot[:,it]
+        e_k[0,it] = e_k[0,it] + 1/2 * self.m[ij] * vt.T @ vt
+        e_k[0,it] = e_k[0,it] + 1/2 * self.I[ij] * angvt.T @ angvt
+
+    energyOut = so.SimpleModelEnergy()
+    energyOut.e_g = e_g
+    energyOut.e_k = e_k
+    energyOut.e_mechAll = e_mechAll
+    energyOut.e_mech = e_mech
+    return energyOut
 
   @staticmethod 
   def xy2joints(xy,lengths):
@@ -103,309 +168,177 @@ class doublePendulum:
     #eqs = MassMat @ accs - F - G - taus
     return ca.vertcat(e1,e2)
 
-  def movementTimeOpt(self, xystart, xyend, N=100, theFRCoef = 8.5e-2, theTimeValuation = 1, theGeneratePlots = 1):
+  def movementTimeOpt(self, theXYStart, theXYEnd, theN=100, theFRCoef = 8.5e-2, theTimeValuation = 1, theGeneratePlots = 1):
   # def movementTimeOpt(self, xystart, xyend, N=100, generate_plots = 1):
-  # Trajectory optimization problem formulation, hermite simpson
+  # Trajectory optimization problem formulation, hermite simpson, implicit dynamics constraints means
+  # We ask the solver to find (for example) accelerations and write the equations of motion implicitly. 
     
     # Create opti instance.
     opti = ca.Opti()
 
-    # Opt variables for state. 
+    # Opt variables for duration, state, and controls.  
     duration = opti.variable() #opti.variable()
-    dt = duration/N
-    time = ca.linspace(0., duration, N+1)  # Discretized time vector
-    q = opti.variable(8, N+1)
+    dt = duration/theN
+    time = ca.linspace(0., duration, theN+1)  # Discretized time vector
+    qAll = opti.variable(8, theN+1)
     # position
-    q1 = q[0, :]
-    q2 = q[1, :]
+    Q = qAll[0:2,:]
+    q1 = qAll[0, :]
+    q2 = qAll[1, :]
     # velocity
-    dq1 = q[2, :]
-    dq2 = q[3, :]
+    QDot = qAll[2:4,:]
+    dq1 = qAll[2, :]
+    dq2 = qAll[3, :]
     # force
-    u1 = q[4, :]
-    u2 = q[5, :]
+    U = qAll[4:6,:]
+    u1 = qAll[4, :]
+    u2 = qAll[5, :]
     # force rate
-    du1 = q[6, :]
-    du2 = q[7, :]
-
+    du = qAll[6:8,:]
+    
     # optimal acc. a decision variable allowing implicit equations of motion.
-    acc = opti.variable(2,N+1)
-
-    qdim = q.shape[0]
-    ddtCon = opti.variable(qdim,N+1)
-    accdim = acc.shape[0]
-    eomCon = opti.variable(accdim,N+1)
+    acc = opti.variable(2,theN+1)
 
     # Force rate
-    uraterate = opti.variable(2, N+1)
-    ddu1 = uraterate[0, :]
-    ddu2 = uraterate[1, :]
+    uraterate = opti.variable(2, theN+1)
 
-    # slack variables for power and force-rate-rate
-    slackVars = opti.variable(8, N+1)
-    pPower1 = slackVars[0, :]
-    pPower2 = slackVars[1, :]
-    pddu1 = slackVars[2,:]
-    pddu2 = slackVars[3,:]
-    nddu1 = slackVars[4,:]
-    nddu2 = slackVars[5,:]
-
-    def EOM(qin,accin,parms):
-      uin1 = qin[4]
-      uin2 = qin[5]
-      acc1 = accin[0]
-      acc2 = accin[1]
-      # m*a - F =0. 
-      return ca.vertcat(acc1*parms.m[0] - uin1,acc2*parms.m[0] - uin2)
-
-    power1 = dq1*u1
-    power2 = dq2*u2 - u2*dq1
-
-    # Calculus equations
+    # Calculus equation constraint
     def qd(qi, ui,acc): return ca.vertcat(qi[2], qi[3], acc[0], acc[1], qi[6],qi[7],ui[0],ui[1])  # dq/dt = f(q,u)
     # Loop over discrete time
 
-    def HermiteSimpson(theOpt:ca.Opti, theDDTFun, theEOMFun, theQ, theQDotDot, theUIn,indQDot=[2,3]):
-      outDFCon = ca.SX(theQ.shape[0],theQ.shape[1])
-      outQDDCon = ca.SX(theQ.shape[0],theQ.shape[1])
-      for k in range(theQ.shape[1]-1):
-        # Hermite Simpson quadrature for all derivatives. 
-        f = theDDTFun(theQ[:, k], theUIn[:, k], theQDotDot[:,k])
-        fnext = theDDTFun(theQ[:, k+1], theUIn[:, k+1], theQDotDot[:,k])
-        qhalf = 0.5*(theQ[:, k] + theQ[:, k+1]) + dt/8*(f - fnext)
-        uhalf = 0.5*(theUIn[:, k] + theUIn[:, k+1])
-        acchalf = 0.5*(theQDotDot[:, k] + theQDotDot[:, k+1]) + dt/8*(f[indQDot,:] - fnext[indQDot,:])
-        fhalf = qd(qhalf, uhalf, acchalf)
-        opti.subject_to(theQ[:, k+1] - theQ[:, k] == dt/6 * (f + 4*fhalf + fnext))  # close the gaps
-        ### CONSTRAINTS: IMPLICIT
-        opti.subject_to(theEOMFun(theQ[:,k],theQDotDot[:,k]) == 0) 
-        # outDFCon[:,k] = theQ[:, k+1] - theQ[:, k] - dt/6 * (f + 4*fhalf + fnext)
-        # outQDDCon[:,k] = theEOMFun(theQ[:,k],theQDotDot[:,k],parms)
-
-    HermiteSimpson(opti,qd,self.implicitEOM,q,acc,uraterate,[2,3])
+    so.HermiteSimpsonImplicit(opti,qd,self.implicitEOM,qAll,acc,uraterate,dt,[2,3])
     
+    mechPower = self.jointPower(QDot,U)
+
     # CONSTRAINTS (NON_TASK_SPECIFIC): BROAD BOX LIMITS
     # variables will be bounded between +/- Inf).
-    opti.subject_to(opti.bounded(-10, q1, 10))
-    opti.subject_to(opti.bounded(-10, q2, 10))
+    opti.subject_to(opti.bounded(-10, Q[0,:], 10))
+    opti.subject_to(opti.bounded(-10, Q[1,:], 10))
 
     ### CONSTRAINTS (NON_TASK_SPECIFIC): SLACK VARIABLES FOR POWER
+    # # slack variables for power and force-rate-rate
+    slackVars = opti.variable(6, theN+1)
+    pPower = slackVars[0:2, :]
+    pddu = slackVars[2:4,:]
+    nddu = slackVars[4:6,:]
+    
     # positive power constraints
-    opti.subject_to(pPower1 >= 0.) 
-    opti.subject_to(pPower2 >= 0.) 
-    opti.subject_to(pPower1 >= power1) 
-    opti.subject_to(pPower2 >= power2) 
+    opti.subject_to(pPower[0,:] >= 0.) 
+    opti.subject_to(pPower[1,:] >= 0.) 
+    opti.subject_to(pPower[0,:] >= mechPower[0,:]) 
+    opti.subject_to(pPower[1,:] >= mechPower[1,:]) 
     # fraterate constraints
-    opti.subject_to(pddu1 >= 0.)  
-    opti.subject_to(pddu2 >= 0.)  
-    opti.subject_to(pddu1 >= ddu1)  
-    opti.subject_to(pddu2 >= ddu2)  
-    opti.subject_to(nddu1 <= 0.)  
-    opti.subject_to(nddu2 <= 0.)  
-    opti.subject_to(nddu1 <= ddu1) 
-    opti.subject_to(nddu2 <= ddu2) 
-    #opti.subject_to(slackVars[:, N] == 0.)
-
-    ### OBJECTIVE
-    def trapInt(t,inVec):
-            sumval = 0.
-            for ii in range(0,N):
-                sumval = sumval + (inVec[ii]+inVec[ii+1])/2.0*(dt)
-            return sumval
-        
-    frCoef = theFRCoef
-    timeValuation = theTimeValuation
-    costTime = duration * timeValuation
-    costWork = trapInt(time,pPower1)+trapInt(time,pPower2)
-    costFR = frCoef * (trapInt(time,pddu1) + trapInt(time,pddu2) - trapInt(time,nddu1) - trapInt(time,nddu2))
-    J = costTime + costWork + costFR
-
+    opti.subject_to(pddu[0,:] >= 0.)  
+    opti.subject_to(pddu[1,:] >= 0.)  
+    opti.subject_to(pddu[0,:] >= uraterate[0,:])  
+    opti.subject_to(pddu[1,:] >= uraterate[1,:])  
+    opti.subject_to(nddu[0,:] <= 0.)  
+    opti.subject_to(nddu[1,:] <= 0.)  
+    opti.subject_to(nddu[0,:] <= uraterate[0,:]) 
+    opti.subject_to(nddu[1,:] <= uraterate[1,:]) 
+    
     #################################### CONSTRAINTS: TASK-SPECIFIC (BOUNDARY)
     # Boundary constraints - periodic gait.
-    q1CON0 = doublePendulum.xy2joints(xystart,self.l)
-    q1CON1 = doublePendulum.xy2joints(xyend,self.l)
-    q1_con_start = q1CON0[0]
-    q2_con_start = q1CON0[1]
-    
-    q1_con_end = q1CON1[0]
-    q2_con_end = q1CON1[1]
+    qCON0 = doublePendulum.xy2joints(theXYStart,self.l)
+    qCON1 = doublePendulum.xy2joints(theXYEnd,self.l)
 
-    opti.subject_to(q1[0] == q1_con_start)
-    opti.subject_to(q2[0] == q2_con_start)
-    opti.subject_to(q1[-1] == q1_con_end)
-    opti.subject_to(q2[-1] == q2_con_end)
-    opti.subject_to(dq1[0] == 0.0)
-    opti.subject_to(dq2[0] == 0.0)
-    opti.subject_to(dq1[-1] == 0.0)
-    opti.subject_to(dq2[-1] == 0.0)
-    opti.subject_to(u1[0] == 0.0)
-    opti.subject_to(u2[0] == 0.0)
-    opti.subject_to(u1[-1] == 0.0)
-    opti.subject_to(u2[-1] == 0.0)
+    opti.subject_to(Q[0,0] == qCON0[0])
+    opti.subject_to(Q[1,0] == qCON0[1])
+    opti.subject_to(Q[0,-1] == qCON1[0])
+    opti.subject_to(Q[1,-1] == qCON1[1])
+    opti.subject_to(QDot[0,0] == 0.0)
+    opti.subject_to(QDot[1,0] == 0.0)
+    opti.subject_to(QDot[0,-1] == 0.0)
+    opti.subject_to(QDot[1,-1] == 0.0)
+    opti.subject_to(U[0,0] == 0.0)
+    opti.subject_to(U[1,0] == 0.0)
+    opti.subject_to(U[0,-1] == 0.0)
+    opti.subject_to(U[1,-1] == 0.0)
 
     ### i don't understand why these are infeasible
-    opti.subject_to(du1[0] == 0.0)
-    opti.subject_to(du2[0] == 0.0)
-    opti.subject_to(du1[-1] == 0.0)
-    opti.subject_to(du2[-1] == 0.0)
+    opti.subject_to(du[0,0] == 0.0)
+    opti.subject_to(du[1,0] == 0.0)
+    opti.subject_to(du[0,-1] == 0.0)
+    opti.subject_to(du[1,-1] == 0.0)
 
-    opti.subject_to(ddu1[0] == 0.0)
-    opti.subject_to(ddu2[0] == 0.0)
-    opti.subject_to(ddu1[-1] == 0.0)
-    opti.subject_to(ddu2[-1] == 0.0)
+    opti.subject_to(uraterate[0,0] == 0.0)
+    opti.subject_to(uraterate[1,0] == 0.0)
+    opti.subject_to(uraterate[0,-1] == 0.0)
+    opti.subject_to(uraterate[1,-1] == 0.0)
 
     opti.subject_to(acc[0,0] == 0.0)
     opti.subject_to(acc[1,0] == 0.0)
     opti.subject_to(acc[0,-1] == 0.0)
     opti.subject_to(acc[1,-1] == 0.0)
 
-    opti.subject_to(pddu1[0] == 0.0)
-    opti.subject_to(pddu2[0] == 0.0)
-    opti.subject_to(pddu1[-1] == 0.0)
-    opti.subject_to(pddu2[-1] == 0.0)
+    opti.subject_to(pddu[0,0] == 0.0)
+    opti.subject_to(pddu[1,0] == 0.0)
+    opti.subject_to(pddu[0,-1] == 0.0)
+    opti.subject_to(pddu[1,-1] == 0.0)
 
-    opti.subject_to(duration >=0.0) #critical!
-    opti.subject_to(duration <=10.0) #critical!
+    opti.subject_to(duration >=0.0)  # critical!
+    opti.subject_to(duration <=20.0) # maybe unnecessary! =)
     
-    q1guess = np.linspace(q1_con_start, q1_con_end, N+1)
-    q2guess = np.linspace(q2_con_start, q2_con_end, N+1)
+    ############################################################################################################################################
+    ############## OBJECTIVE ############## 
+    frCoef = theFRCoef
+    timeValuation = theTimeValuation
+    costTime = duration * timeValuation
+    costWork = so.trapInt(time,pPower[0,:])+so.trapInt(time,pPower[1,:])
+    costFR = frCoef * (so.trapInt(time,pddu[0,:]) + so.trapInt(time,pddu[1,:]) - so.trapInt(time,nddu[0,:]) - so.trapInt(time,nddu[1,:]))
+    costJ = costTime + costWork + costFR
+    # Set cost function
+    opti.minimize(costJ)
+    
+    ############################################################################################################################################
+    ############## GUESS ############## 
+    q1guess = np.linspace(qCON0[0], qCON1[0], theN+1)
+    q2guess = np.linspace(qCON0[1], qCON1[1], theN+1)
     opti.set_initial(q1, q1guess)
     opti.set_initial(q2, q2guess)
-
     opti.set_initial(duration,1.0)
-    ####################################/ END CONSTRAINTS: TASK-SPECIFIC (BOUNDARY)
 
-    # Set cost function
-    opti.minimize(J)
-
-    # Hyperparameters
-    maxIter = 1000
+    ############################################################################################################################################
+    ############## Hyperparameters and solve ############## 
+    maxIter = 200
     pOpt = {"expand":True}
     sOpt = {"max_iter": maxIter}
     opti.solver('ipopt',pOpt,sOpt)
     def callbackPlots(i):
         plt.plot(opti.debug.value(time),opti.debug.value(q1),
-          opti.debug.value(time), opti.debug.value(q2),color=(1,1-i/(maxIter),1))
+          opti.debug.value(time), opti.debug.value(q2),color=(1,.8-.8*i/(maxIter),1))
     opti.callback(callbackPlots)
-
-    # Solve the NLP.
     sol = opti.solve()
 
-    ################################# ##################################################################
-    ################################# ##################################################################
-    # post optimization
+    ############################################################################################################################################
+    ############## Post optimization ############## 
     
-    # % Extract the optimal states and controls.
-    # Optimal segment angles.
-    q1_opt = sol.value(q1)
-    q2_opt = sol.value(q2)
-    # Optimal segment angular velocities.
-    dq1_opt = sol.value(dq1)
-    dq2_opt = sol.value(dq2)
-    # Optimal torques.
-    u1_opt = sol.value(u1)
-    u2_opt = sol.value(u2)
-    ddu1_opt = sol.value(ddu1)
-    ddu2_opt = sol.value(ddu2)
-    pPower1_opt = sol.value(pPower1)
-    pPower2_opt = sol.value(pPower2)
-    power1_opt = sol.value(power1)
-    power2_opt = sol.value(power2)
-    time_opt = sol.value(time)
-    J_opt = sol.value(J)
-    duration_opt = sol.value(duration)
-    costWork_opt = sol.value(costWork)
-    costTime_opt = sol.value(costTime)
-    costFR_opt = sol.value(costFR)
+    # Extract the optimal states and controls.
+    optTraj = so.optTrajectories()
+    optTraj.time = sol.value(time)
+    optTraj.Q = sol.value(Q)
+    optTraj.QDot = sol.value(QDot)
+    optTraj.U = sol.value(U)
+    optTraj.mechPower = sol.value(mechPower)
+    optTraj.costJ = sol.value(costJ)
+    optTraj.costTime = sol.value(costTime)
+    optTraj.costWork = sol.value(costWork)
+    optTraj.costFR = sol.value(costFR)
+    optTraj.uraterate = sol.value(uraterate)
+    optTraj.duration = sol.value(duration)
 
-    # return trajectories to 'output'
-    output = Struct()
-    output.add("time",time_opt)
-    output.add("q1",q1_opt)
-    output.add("q2",q2_opt)
-    output.add("dq1",dq1_opt)
-    output.add("dq2",dq2_opt)
-    output.add("u1",u1_opt)
-    output.add("u2",u2_opt)
-    output.add("power1",power1_opt)
-    output.add("power2",power2_opt)
-    output.add("costTime",costTime_opt)
-    output.add("costWork",costWork_opt)
-    output.add("costFR",costFR_opt)
-    output.add("costJ",costFR_opt)
-    output.add("duration",duration_opt)
+    ### compute peak handspeed and peak speed
+    handspeed_opt = np.ndarray([optTraj.Q.shape[1]])
+    for i in range(0,optTraj.U.shape[1]):
+      qtemp = np.array([optTraj.Q[0,i],optTraj.Q[1,i]])
+      qdottemp = np.array([optTraj.QDot[0,i],optTraj.QDot[1,i]])
+      handspeed_opt[i],dum = self.handspeed(qtemp,qdottemp)
+    optTraj.handspeed = handspeed_opt
+    peakhandspeed = max(handspeed_opt)
+    optTraj.peakhandspeed = peakhandspeed
+    ### /compute peak handspeed and peak speed
 
-    # compute peak handspeed
-    handvel_opt = np.ndarray([q1_opt.shape[0]])
-    for i in range(0,time_opt.shape[0]):
-      qtemp = np.array([output.q1[i],output.q2[i]])
-      qdottemp = np.array([output.dq1[i],output.dq2[i]])
-      handvel_opt[i],dum = self.handspeed(qtemp,qdottemp)
-    output.add("handvel",handvel_opt)
-    peakhandspeed = max(handvel_opt)
-    output.add("peakhandspeed",peakhandspeed)
     if theGeneratePlots:
-      # segment angles.
-      fig = plt.figure()
-      ax = plt.gca()
-      lineObjects = ax.plot(time_opt, q1_opt,
-                            time_opt, q2_opt)
-      plt.xlabel('Time [s]')
-      plt.ylabel('segment angles [°]')
-      plt.legend(iter(lineObjects), ('x', 'y'))
-      plt.draw()
-      plt.show()
+      optTraj.generatePlots()
 
-      fig = plt.figure()
-      ax = plt.gca()
-      lineObjects = ax.plot(time_opt, dq1_opt,
-                            time_opt, dq2_opt)
-      plt.xlabel('Time [s]')
-      plt.ylabel('speed [s^-1]')
-      plt.legend(iter(lineObjects), ('x', 'y'))
-      plt.draw()
-      plt.show()
-
-      # Joint torques.
-      fig = plt.figure()
-      ax = plt.gca()
-      lineObjects = ax.plot(time_opt, u1_opt,
-                            time_opt, u2_opt)
-      plt.xlabel('Time [s]')
-      plt.ylabel('Joint torques [Nm]')
-      plt.legend(iter(lineObjects), ('x', 'y'))
-      plt.draw()
-      plt.show()
-
-      fig = plt.figure()
-      ax = plt.gca()
-      lineObjects = ax.plot(time_opt, u1_opt,
-                            time_opt, u2_opt)
-      plt.xlabel('Time [s]')
-      plt.ylabel('Force [N]')
-      plt.legend(iter(lineObjects), ('x', 'y'))
-      plt.draw()
-      plt.show()
-
-      fig = plt.figure()
-      ax = plt.gca()
-      lineObjects = ax.plot(time_opt, ddu1_opt,
-                            time_opt, ddu2_opt)
-      plt.xlabel('Time [s]')
-      plt.ylabel('force rate rate [N/s^2]')
-      plt.legend(iter(lineObjects), ('x', 'y'))
-      plt.draw()
-      plt.show()
-
-      fig = plt.figure()
-      ax = plt.gca()
-      lineObjects = ax.plot(time_opt, power1_opt, 
-                            time_opt, pPower1_opt, 
-                            )
-      plt.xlabel('Time [s]')
-      plt.ylabel('Power')
-      plt.legend(iter(lineObjects), ('power', 'pos'))
-      plt.draw()
-      plt.show()
-
-    return duration_opt, J_opt, costWork_opt, costFR_opt, costTime_opt, peakhandspeed , output  
+    return optTraj.duration, optTraj.costJ, optTraj.costWork, optTraj.costFR, optTraj.costTime, optTraj.peakhandspeed, optTraj  
