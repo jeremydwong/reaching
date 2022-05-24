@@ -393,9 +393,142 @@ class SimpleModel:
       return failTraj, optiParamReturn(opti)
 
 
-  def refineMesh(self,op1:optiParamReturn, op2:optiParamReturn):
+  def guessWithTrajectory(self,op1:optiParamReturn, op2:optiParamReturn):
     
     return 0
+  
+  # def movementTimeOptSetup(self, 
+  # theN=100, 
+  # theFRCoef = 8.5e-2, 
+  # theTimeValuation = 1, 
+  # theDuration = [], 
+  # theDurationGuess = .5):
+  # Trajectory optimization problem formulation, hermite simpson, implicit dynamics constraints means
+  # We ask the solver to find (for example) accelerations and write the equations of motion implicitly. 
+  def movementTimeOptSetup(self, 
+    theN              =100, 
+    theFRCoef         = 8.5e-2, 
+    theTimeValuation  = 1, 
+    theDuration       = [], #if empty, we are optimizing for duration. 
+    theDurationGuess  = .5):
+
+    opti = ca.Opti()
+    
+    ### Define STATE (Q), Acceleration (ddqdt2), force-rate, SLACKVARS, 
+    ### and Parameters: qstart, qend, timeValuation, frCoef 
+    Q = opti.variable(self.DoF*4, theN+1)
+    # optimal acceleration, for implicit equations of motion.
+    ddqdt2 = opti.variable(self.DoF,theN+1)
+    # Force rate
+    ddudt2 = opti.variable(self.DoF, theN+1)
+    # slack variables
+    slackVars = opti.variable(self.DoF*3, theN+1)  #fully-actuated, constrain 1:fr_p, 2:fr_n, 3:power_p.
+    # parameters: these can change from opt to opt
+    qstart = opti.parameter(self.DoF,1)
+    qend = opti.parameter(self.DoF,1)
+    timeValuation = opti.parameter()
+    opti.set_value(timeValuation, theTimeValuation)
+    frCoef = opti.parameter()
+    opti.set_value(frCoef, theFRCoef)
+    ###/
+    
+    ### Define movement duration as either optimized, or fixed. 
+    ### if we are optimizing movement time, make it an opti.variable()
+    ###, and solve for it. place some loose bounds on duration.
+    if not(theDuration):
+      duration = opti.variable() 
+      opti.subject_to(duration > 0.0)  # critical!
+      opti.subject_to(duration <=20.0) # maybe unnecessary! =)
+      durationInitial = theDurationGuess
+      opti.set_initial(duration,durationInitial)
+    else:
+      duration = theDuration
+      durationInitial = duration 
+    dt = (duration)/theN
+    time = ca.linspace(0., duration, theN+1)  # Discretized time vector
+    ###/
+
+    # extract columns of Q for handiness.
+    # position
+    q = Q[0:2,:]
+    q1 = Q[0, :]
+    q2 = Q[1, :]
+    # velocity
+    dqdt = Q[2:4,:]
+    # force
+    u = Q[4:6,:]
+    # force rate
+    dudt = Q[6:8,:]
+    
+    # Calculus equation constraint
+    def qd(qi, ui,acc): return ca.vertcat(qi[2], qi[3], acc[0], acc[1], qi[6],qi[7],ui[0],ui[1])  # dq/dt = f(q,u)
+    # Loop over discrete nodes and enforce calculus constraints. 
+    HermiteSimpsonImplicit(opti,qd,self.implicitEOMQ,Q,ddqdt2,ddudt2,dt,[2,3])
+    
+    # CONSTRAINTS (NON_TASK_SPECIFIC): BROAD BOX LIMITS
+    # variables will be bounded between +/- Inf).
+    # for i in range(0,q.shape[0]):
+    #   opti.subject_to(opti.bounded(-2*ca.pi, q[i,:], 2*ca.pi))
+
+    ##### SLACK VARIABLES: Primarily for power constraints, also for force rate. 
+    ### CONSTRAINTS (NON_TASK_SPECIFIC): SLACK VARIABLES FOR POWER
+    # # extract slack variables for power and force-rate-rate for handiness.
+    pPower = slackVars[0:self.DoF,         :]
+    pddu = slackVars[self.DoF:self.DoF*2,  :]
+    nddu = slackVars[self.DoF*2:self.DoF*3,:]
+
+    mechPower = self.jointPower(dqdt,u)
+    # positive power constraints
+    opti.subject_to(time[:] >= 0.) 
+    opti.subject_to(pPower[0,:] >= 0.) 
+    opti.subject_to(pPower[1,:] >= 0.) 
+    opti.subject_to(pPower[0,:] >= mechPower[0,:]) 
+    opti.subject_to(pPower[1,:] >= mechPower[1,:]) 
+    # fraterate constraints
+    opti.subject_to(pddu[0,:] >= 0.)  
+    opti.subject_to(pddu[1,:] >= 0.)  
+    opti.subject_to(pddu[0,:] >= ddudt2[0,:])  
+    opti.subject_to(pddu[1,:] >= ddudt2[1,:])  
+    opti.subject_to(nddu[0,:] <= 0.)  
+    opti.subject_to(nddu[1,:] <= 0.)  
+    opti.subject_to(nddu[0,:] <= ddudt2[0,:]) 
+    opti.subject_to(nddu[1,:] <= ddudt2[1,:]) 
+    
+    #################################### CONSTRAINTS: TASK-SPECIFIC (BOUNDARY CONSTRAINTS) ####################################
+    # Boundary constraints. Often zeros
+    def initAndEndZeros(opti,list):
+      for var in list:
+        for dof in range(0,var.shape[0]):
+          opti.subject_to(var[dof,0] == 0.0)
+          opti.subject_to(var[dof,-1] == 0.0)
+    initAndEndZeros(opti,[dqdt,u,ddudt2,ddqdt2,pddu,nddu])
+    
+    opti.subject_to(q[:,0] == qstart)
+    opti.subject_to(q[:,-1] == qend)
+
+    ############################################################################################################################################
+    ############## OBJECTIVE ############## 
+    costTime = time[-1] * timeValuation
+    costWork = trapInt(time,pPower[0,:])+trapInt(time,pPower[1,:])
+    costFR = frCoef * (trapInt(time,pddu[0,:]) + trapInt(time,pddu[1,:]) - trapInt(time,nddu[0,:]) - trapInt(time,nddu[1,:]))
+    costJ = costTime + costWork + costFR
+    # Set cost function
+    opti.minimize(costJ)
+
+    ############################################################################################################################################
+    ############## Hyperparameters and solve ############## 
+    maxIter = 1000
+    pOpt = {"expand":True}
+    sOpt = {"max_iter": maxIter}
+    opti.solver('ipopt',pOpt,sOpt)
+    def callbackPlots(i):
+        plt.plot(opti.debug.value(time),opti.debug.value(q1),
+          opti.debug.value(time), opti.debug.value(q2),color=(1,.8-.8*i/(maxIter),1))
+    opti.callback(callbackPlots)
+
+    return optiParamReturn(opti,Q = Q, q = q, theQStart = qstart, theQEnd = qend, dqdt = dqdt,\
+       ddqdt2 = ddqdt2,u = u, dudt = dudt, ddudt2 = ddudt2, costJ = costJ, costFR = costFR, costWork = costWork, \
+         costTime = costTime, timeValuation = timeValuation, frCoef = frCoef, N = theN, time = time, duration = duration,mechPower = mechPower)
 
   def updateGuessAndSolve(self,oP:optiParamReturn, xstartnew:np.ndarray, xendnew:np.ndarray, \
     theDurationInitial   = 1.0, \
@@ -497,136 +630,8 @@ class SimpleModel:
       failTraj.costFR    = opti.debug.value(oP.costFR)
       failTraj.uraterate = opti.debug.value(oP.ddudt2)
       failTraj.duration  = opti.debug.value(oP.duration)
-      return failTraj, optiParamReturn(opti,opti.debug.value(oP.Q),theQStart=oP.qstart, theQEnd=oP.qend) 
-
-  # def movementTimeOptSetup(self, 
-  # theN=100, 
-  # theFRCoef = 8.5e-2, 
-  # theTimeValuation = 1, 
-  # theDuration = [], 
-  # theDurationGuess = .5):
-  # Trajectory optimization problem formulation, hermite simpson, implicit dynamics constraints means
-  # We ask the solver to find (for example) accelerations and write the equations of motion implicitly. 
-  def movementTimeOptSetup(self, 
-    theN              =100, 
-    theFRCoef         = 8.5e-2, 
-    theTimeValuation  = 1, 
-    theDuration       = [], #if empty, we are optimizing for duration. 
-    theDurationGuess  = .5):
-
-    opti = ca.Opti()
-    Q = opti.variable(8, theN+1)
-    # optimal acceleration. I add a decision variable for implicit equations of motion.
-    ddqdt2 = opti.variable(2,theN+1)
-    # Force rate
-    ddudt2 = opti.variable(2, theN+1)
-    # slack variables
-    slackVars = opti.variable(6, theN+1)    
-    # parameters: these can change from opt to opt
-    qstart = opti.parameter(self.DoF,1)
-    qend = opti.parameter(self.DoF,1)
-    timeValuation = opti.parameter()
-    opti.set_value(timeValuation, theTimeValuation)
-    frCoef = opti.parameter()
-    opti.set_value(frCoef, theFRCoef)
-    
-    # if we are optimizing movement time, make it an opti.variable(), and solve for it. place some loose bounds on duration.
-    if not(theDuration):
-      duration = opti.variable() 
-      opti.subject_to(duration > 0.0)  # critical!
-      opti.subject_to(duration <=20.0) # maybe unnecessary! =)
-      durationInitial = theDurationGuess
-      opti.set_initial(duration,durationInitial)
-    else:
-      duration = theDuration
-      durationInitial = duration #sets a time vector which we use to generate an initial guess. 
-
-    # Opt variables for duration, state, and controls.  
-    dt = (duration)/theN
-    time = ca.linspace(0., duration, theN+1)  # Discretized time vector
-    
-    # extract columns of Q for handiness.
-    # position
-    q = Q[0:2,:]
-    q1 = Q[0, :]
-    q2 = Q[1, :]
-    # velocity
-    dqdt = Q[2:4,:]
-    # force
-    u = Q[4:6,:]
-    # force rate
-    dudt = Q[6:8,:]
-    
-    # Calculus equation constraint
-    def qd(qi, ui,acc): return ca.vertcat(qi[2], qi[3], acc[0], acc[1], qi[6],qi[7],ui[0],ui[1])  # dq/dt = f(q,u)
-    # Loop over discrete nodes and enforce calculus constraints. 
-    HermiteSimpsonImplicit(opti,qd,self.implicitEOMQ,Q,ddqdt2,ddudt2,dt,[2,3])
-    
-    # CONSTRAINTS (NON_TASK_SPECIFIC): BROAD BOX LIMITS
-    # variables will be bounded between +/- Inf).
-    opti.subject_to(opti.bounded(-10, q[0,:], 10))
-    opti.subject_to(opti.bounded(-10, q[1,:], 10))
-
-    ##### SLACK VARIABLES: Primarily for power constraints, also for force rate. 
-    
-    ### CONSTRAINTS (NON_TASK_SPECIFIC): SLACK VARIABLES FOR POWER
-    # # extract slack variables for power and force-rate-rate for handiness.
-    pPower = slackVars[0:2, :]
-    pddu = slackVars[2:4,:]
-    nddu = slackVars[4:6,:]
-
-    mechPower = self.jointPower(dqdt,u)
-    # positive power constraints
-    opti.subject_to(time[:] >= 0.) 
-    opti.subject_to(pPower[0,:] >= 0.) 
-    opti.subject_to(pPower[1,:] >= 0.) 
-    opti.subject_to(pPower[0,:] >= mechPower[0,:]) 
-    opti.subject_to(pPower[1,:] >= mechPower[1,:]) 
-    # fraterate constraints
-    opti.subject_to(pddu[0,:] >= 0.)  
-    opti.subject_to(pddu[1,:] >= 0.)  
-    opti.subject_to(pddu[0,:] >= ddudt2[0,:])  
-    opti.subject_to(pddu[1,:] >= ddudt2[1,:])  
-    opti.subject_to(nddu[0,:] <= 0.)  
-    opti.subject_to(nddu[1,:] <= 0.)  
-    opti.subject_to(nddu[0,:] <= ddudt2[0,:]) 
-    opti.subject_to(nddu[1,:] <= ddudt2[1,:]) 
-    
-    #################################### CONSTRAINTS: TASK-SPECIFIC (BOUNDARY CONSTRAINTS) ####################################
-    # Boundary constraints. Often zeros
-    def initAndEndZeros(opti,list):
-      for var in list:
-        for dof in range(0,var.shape[0]):
-          opti.subject_to(var[dof,0] == 0.0)
-          opti.subject_to(var[dof,-1] == 0.0)
-    initAndEndZeros(opti,[dqdt,u,ddudt2,ddqdt2,pddu,nddu])
-    
-    opti.subject_to(q[:,0] == qstart)
-    opti.subject_to(q[:,-1] == qend)
-
-    ############################################################################################################################################
-    ############## OBJECTIVE ############## 
-    costTime = time[-1] * timeValuation
-    costWork = trapInt(time,pPower[0,:])+trapInt(time,pPower[1,:])
-    costFR = frCoef * (trapInt(time,pddu[0,:]) + trapInt(time,pddu[1,:]) - trapInt(time,nddu[0,:]) - trapInt(time,nddu[1,:]))
-    costJ = costTime + costWork + costFR
-    # Set cost function
-    opti.minimize(costJ)
-
-    ############################################################################################################################################
-    ############## Hyperparameters and solve ############## 
-    maxIter = 1000
-    pOpt = {"expand":True}
-    sOpt = {"max_iter": maxIter}
-    opti.solver('ipopt',pOpt,sOpt)
-    def callbackPlots(i):
-        plt.plot(opti.debug.value(time),opti.debug.value(q1),
-          opti.debug.value(time), opti.debug.value(q2),color=(1,.8-.8*i/(maxIter),1))
-    opti.callback(callbackPlots)
-
-    return optiParamReturn(opti,Q = Q, q = q, theQStart = qstart, theQEnd = qend, dqdt = dqdt,\
-       ddqdt2 = ddqdt2,u = u, dudt = dudt, ddudt2 = ddudt2, costJ = costJ, costFR = costFR, costWork = costWork, \
-         costTime = costTime, timeValuation = timeValuation, frCoef = frCoef, N = theN, time = time, duration = duration,mechPower = mechPower)
+      oP.copy
+      return failTraj, oP
 
 ##############################################################################################################################################################################################
 ##############################################################################################################################################################################################
@@ -708,8 +713,8 @@ class optTrajectories:
                             self.time, self.mechPower[1,:], 
                             )
       plt.xlabel('Time [s]')
-      plt.ylabel('Power')
-      plt.legend(iter(lineObjects), ('1', '2'))
+      plt.ylabel('Power [W]')
+      plt.legend(iter(lineObjects), ('q[0]', 'q[1]'))
       plt.draw()
       plt.show()
 

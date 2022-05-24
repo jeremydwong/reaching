@@ -1,0 +1,39 @@
+#%%
+import ReachingModels as reaching
+import numpy as np
+import matplotlib.pyplot as plt
+import colour as clr
+import time
+
+# loopValuation = [1,2,3]
+# color1 = clr.Color("#e0f3db")
+# distcolors = list(color1.range_to(clr.Color("#084081"),len(loopValuation)))
+
+sim = reaching.DoublePendulum()
+%config InlineBackend.figure_formats = ['svg']
+
+tstart = time.time()
+prevSol = []
+dGuess = 1.0
+optiPrev = sim.movementTimeOptSetup(
+  theTimeValuation  = 1.0, 
+  theN              = 200)
+
+xystart = np.array([0,0.2])
+trajOrig, opti1 = sim.updateGuessAndSolve(optiPrev, 
+  xystart, 
+  xystart + np.array([0,.1]), 
+  theDurationInitial = 0.5,
+  theTimeValuation = 1,
+  theGeneratePlots = 1)
+
+tend = time.time()
+durIncludingSetup = tend-tstart
+
+energy = sim.energy(trajOrig.Q,trajOrig.QDot,trajOrig.U,trajOrig.time)
+fig,ax = plt.subplots()
+ax.plot(trajOrig.time, energy.e_k,label = "kinetic energy")
+ax.plot(trajOrig.time,energy.e_mech, label = "mechanical work")
+ax.set_ylabel("Energy [J]")
+ax.set_xlabel("Time [s]")
+# %%
