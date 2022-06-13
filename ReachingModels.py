@@ -16,40 +16,42 @@ class PointMass(so.SimpleModel):
   m = [1]
   kDamp = 0
 
-  ##############################################################################################################################################################################################
-  def implicitEOM(self, q, qdot, u, acc):
-    return ca.vertcat(u[0]-self.kDamp*qdot[0] - self.m[0]*acc[0],
-      u[1] - self.kDamp*qdot[1] - self.m[0]*acc[1])
-  ##############################################################################################################################################################################################
-  def implicitEOMQ(self, Q, acc):
-    return self.implicitEOM(Q[0:2],Q[2:4],Q[4:6],acc)
-  ##############################################################################################################################################################################################
   def inverseDynamics(self, q, qdot, qdotdot):
     return ca.vertcat(self.kDamp*qdot[0] + self.m[0]*qdotdot[0],
       self.kDamp*qdot[1] + self.m[0]*qdotdot[1])
-  ##############################################################################################################################################################################################
+  
+  def implicitEOM(self, q, qdot, u, acc):
+    return ca.vertcat(u[0]-self.kDamp*qdot[0] - self.m[0]*acc[0],
+      u[1] - self.kDamp*qdot[1] - self.m[0]*acc[1])
+  
+  def implicitEOMQ(self, Q, acc):
+    return self.implicitEOM(Q[0:2],Q[2:4],Q[4:6],acc)
+  
   def kinematicJacobianInertias(self,q):
     return [np.array([[self.m[0],0],[0,self.m[0]]]), np.array([[self.m[0],0],[0,self.m[0]]])]
-  ##############################################################################################################################################################################################
+  
   def kinematicJacobianRotationalInertias(self):
     return [np.zeros([2,2]),np.zeros([2,2])]
-  ##############################################################################################################################################################################################
+  
   def xy2joints(self,xy):
     return xy
-  ##############################################################################################################################################################################################  
+  
   def heightsMasses(self,q):
     return [q[1]]
-  ##############################################################################################################################################################################################  
+  
   def jointPower(self,qdot, u):
     return ca.vertcat(qdot[0:1,:]*u[0:1,:], qdot[1:2,:]*u[1:2,:])
-  ###############################################################################################################################################################################################
+  
   def kinematicJacobianEndpoint(self, q):
     return np.array([[1,0],[0,1]])
-  ##############################################################################################################################################################################################
+  
   def handspeed(self, q, qdot):
     hvel = self.kinematicJacobianEndpoint(q) @ qdot
     htan = np.sqrt(hvel[0]**2+hvel[1]**2)
     return htan, hvel
+  
+  def setHandMass(self, inM):
+    self.m = inM
 
 class Kinarm(so.SimpleModel):
   DoF = 2
@@ -225,6 +227,10 @@ class Kinarm(so.SimpleModel):
     r7 = np.array([[1,1],[0,0]])
     return [r1,r2,r3,r4,r5,r6,r7]
 
+  def joints2Endpoint(self, q):
+      return ca.vertcat(self.l[0]*ca.cos(q[0])+self.l[1]*ca.cos(q[0]+q[1]),\
+        self.l[0]*ca.sin(q[0])+self.l[1]*ca.sin(q[0]+q[1]))
+
   def heightsMasses(self,q):
     q1 = q[0]
     q2 = q[1]
@@ -253,7 +259,10 @@ class Kinarm(so.SimpleModel):
     q1 = gamma - beta
     elb = np.arccos((l2**2+l1**2-c**2)/(2*l2*l1))
     q2 = np.pi - (elb-q1)
-    return np.array([q1,q2-q1])
+    out = np.array([q1,q2-q1])
+    if sum(np.isnan(out)) > 0:
+      print("Warning! this hand position is unreachable given l1 and l2. Nans returned.")
+    return out
   
   def kinematicJacobianEndpoint(self, q):
     l1 = self.l[0]
@@ -284,6 +293,9 @@ class Kinarm(so.SimpleModel):
     JacGlob2Loc = np.array([[1,0],[-1,1]])
     tauGlob = JacGlob2Loc.T @ tauLoc
     return tauGlob
+
+  def setHandMass(self, inM = 0.0):
+    self.mHandMass = inM
 
   @staticmethod
   def segment2joint(angles):
@@ -331,6 +343,10 @@ class DoublePendulum(so.SimpleModel):
     
     return [j_uarm, j_larm, j_hand]
   
+  def joints2Endpoint(self, q):
+      return ca.vertcat(self.l[0]*ca.cos(q[0])+self.l[1]*ca.cos(q[1]),\
+        self.l[0]*ca.sin(q[0])+self.l[1]*ca.sin(q[1]))
+
   # returns the global (inertial reference frame) angular velocities of the segments
   def kinematicJacobianRotationalInertias(self):
     r0 = np.array([[1,0],[0,0]])
@@ -345,6 +361,9 @@ class DoublePendulum(so.SimpleModel):
     g2 = self.l[0]*ca.sin(theQ[0]) + self.l[1]*ca.sin(theQ[1])*self.m[2]*self.g
     
     return [g0,g1,g2]
+
+  def setHandMass(self, inM = 0.0):
+    return 0
 
   def xy2joints(self, xy):
     #function out = xy2joints(xy,lengths)
@@ -363,7 +382,10 @@ class DoublePendulum(so.SimpleModel):
     q1 = gamma - beta
     elb = np.arccos((l2**2+l1**2-c**2)/(2*l2*l1))
     q2 = np.pi - (elb-q1)
-    return np.array([q1,q2])
+    out = np.array([q1,q2])
+    if sum(np.isnan(out)) > 0:
+      print("Warning! this hand position is unreachable given l1 and l2. Nans returned.")
+    return out
 
   # EOM DEFINITION. 
   def inverseDynamics(self,theQ,theQDot,theQDotDot):

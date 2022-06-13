@@ -11,7 +11,7 @@ color1 = clr.Color("#e0f3db")
 distcolors = list(color1.range_to(clr.Color("#084081"),len(loopValuation)))
 
 sim = reaching.DoublePendulum()
-%config InlineBackend.figure_formats = ['svg']
+#%config InlineBackend.figure_formats = ['svg']
 
 tstart = time.time()
 prevSol = []
@@ -21,10 +21,20 @@ optiPrev = sim.movementTimeOptSetup(
   theN              = 100)
 
 xystart = np.array([0,0.2])
+
+x = 0.0
+prevOpti = sim.movementTimeOptSetup(
+  xystart,
+  xystart + np.array([x,.1]),
+  theTimeValuation  = 1.0,
+  theN              = 100,
+  theDurationGuess  = 1.0)
+
+
 trajOrig, opti1 = sim.updateGuessAndSolve(optiPrev, 
   xystart, 
   xystart + np.array([0,.1]), 
-  theDurationInitial = 0.5,
+  theDurationGuess = 0.5,
   theTimeValuation = 1,
   theGeneratePlots = 1)
 
@@ -35,7 +45,7 @@ tstart = time.time()
 trajOrig, opti1 = sim.updateGuessAndSolve(optiPrev, 
   xystart, 
   xystart + np.array([0,.1]), 
-  theDurationInitial = 0.5,
+  theDurationGuess = 0.5,
   theTimeValuation = 1,
   theGeneratePlots = 1)
 tend = time.time()
@@ -46,7 +56,7 @@ dGuess = trajOrig.duration
 
 tstart = time.time()
 traj1to2, opti1to2 = sim.updateGuessAndSolve(opti1, xystart, xystart + np.array([0,.11]), 
-      theDurationInitial = dGuess,
+      theDurationGuess = dGuess,
       theTimeValuation = 1,
       theGeneratePlots = 1)
 
@@ -55,7 +65,7 @@ durWarmStart = tend-tstart
 print("duration was "+str(durWarmStart) +" seconds.")
 
 traj_origto2, opti_origto2 = sim.updateGuessAndSolve(optiPrev, xystart, xystart + np.array([0,.11]), 
-      theDurationInitial = dGuess,
+      theDurationGuess = dGuess,
       theTimeValuation = 1,
       theGeneratePlots = 1)
 dGuess = trajOrig.duration
