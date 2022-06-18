@@ -44,6 +44,11 @@ def tauLoc2Glob(tauLoc):
     JacGlob2Loc = np.array([[1,0],[-1,1]])
     return np.T(JacGlob2Loc) * tauLoc
 
+def jointangle2xy(l1,l2,q1,q2):
+    x = l1 * ci.cos(q1) + l2 * ci.cos(q1 + q2)
+    y = l1 * ci.sin(q1) + l2 * ci.sin(q1 + q2)
+    return np.array([x,y])
+    
 def invDynKinarmVirtualPower(theQ,theQDot,theQDDot,robTor,P):
  #function [tauGlobal,tauLocal,powers,meanMs,Ms] = invDynKinarmVirtualPower(...
                 #theQ,theQDot,theQDDot,robTor,P)
@@ -132,6 +137,7 @@ powerSho = theQDot[:,0]*tauGlobal[:,0]
 powerElb = theQDot[:,1]*tauGlobal[:,1] - theQDot[:,0]*tauGlobal[:,1]
 powers = [powerSho,powerElb]
 return tauLocal,tauGlobal, powers
+
 
 # def deriveLocalEOM():
 # syms m1 m2 m3 m4 I1 I2 I3 I4 l1 l3 cx1 ca1 cx2 ca2 cx3 ca3 cx4 ca4 Q25 g Imot1 Imot2 cHandMass mHandMass IHandMass real
