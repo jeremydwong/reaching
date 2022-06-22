@@ -51,7 +51,8 @@ class PointMass(so.SimpleModel):
     return htan, hvel
   
   def setHandMass(self, inM):
-    self.m = inM
+    # this is different than the other classes; do nothing.  
+    return 0
 
 class Kinarm(so.SimpleModel):
   DoF = 2
