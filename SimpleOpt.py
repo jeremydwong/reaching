@@ -15,12 +15,12 @@ class optTrajectories:
   uraterate = np.array([0])
   hand      = np.array([0])
 
-  solved = 0
-  costJ = 0
-  costFR = 0
-  costWork = 0
-  costTime = 0
-  duration = 0
+  solved        = 0
+  costJ         = 0
+  costFR        = 0
+  costWork      = 0
+  costTime      = 0
+  duration      = 0
   peakhandspeed = 0
   
   def __init__(self,solved = True):
@@ -39,8 +39,8 @@ class optTrajectories:
 
       fig = plt.figure()
       ax = plt.gca()
-      lineObjects = ax.plot(self.hand[0,:].T,
-                            self.hand[1,:].T)
+      lineObjects = ax.plot(self.hand[0,:],
+                            self.hand[1,:])
       ax.axis('equal')
       plt.xlabel('hand x position [m]')
       plt.ylabel('hand y position [m]')
@@ -101,7 +101,8 @@ class optTrajectories:
 
 class optiParam:
   opti = []           # the casadi optimization class.
-  
+  N = []              # number of nodes.
+
   qstart = []        # starting states
   qend = []           # ending states
   
@@ -110,12 +111,11 @@ class optiParam:
   dqdt = []           # generalized velocities
   ddqdt2 = []         # generalized accelerations
   u = []              # generalized torques
-  frCoef =[]          # force rate coefficient
-  workCoef = []       # work coefficient, sometimes 4.2 {margaria}.
+  kFR =[]          # force rate coefficient
+  kWork = []       # work coefficient, sometimes 4.2 {margaria}.
   dudt = []           # dfr dt
   ddudt2 = []         # ddfr dt2
   sol = []            # previous solution. JDW NOTE : Check this.
-  N = []              # number of nodes.
   costJ = []          # objective value, typically J = Energy(work,costFR*frr) + timeValuation*Duration
   costWork = []       # cost Work
   costFR = []         # cost FR
@@ -126,33 +126,11 @@ class optiParam:
   mechPower = []      # mechanical power
   pPower = []         # positive power
   time = []           # time vector.
-  handMass = []
+  discreteOrCont = [] # yes. is the movement discrete endpoint to endpoint, or cyclic? 
 
-  def __init__(self,opti:ca.Opti,Q = [],theSol = [], workCoef = [], N = [], frCoef = [], theQStart =[], theQEnd = [],q = [], dqdt = [], ddqdt2 = [],u = [], costJ = [], costWork = [], costFR = [], costTime = [], timeValuation = [],dudt = [],ddudt2 = [],mechPower = [], duration = [], time = [], handMass = []):
-    self.opti = opti
-    self.Q = Q
-    self.q = q
-    self.dqdt = dqdt
-    self.ddqdt2 = ddqdt2
-    self.u = u
-    self.dudt = dudt
-    self.ddudt2 = ddudt2
+  def __init__(self,optiIn:ca.Opti, N:int):
+    self.opti = optiIn
     self.N = N
-    self.frCoef = frCoef
-    self.workCoef = workCoef
-    self.qstart = theQStart
-    self.qend = theQEnd
-    self.sol = theSol
-    self.costJ = costJ
-    self.costTime = costTime
-    self.costWork = costWork
-    self.costFR = costFR
-    self.timeValuation = timeValuation
-    self.parameter_names = ["qstart","qend"]
-    self.mechPower = mechPower
-    self.duration = duration
-    self.time = time
-    self.handMass = handMass
 
 class SimpleModelEnergy:
   e_k = np.array([0])
@@ -161,11 +139,11 @@ class SimpleModelEnergy:
   e_mechAll = np.array([0])
 
 # minjerk normalized trajectory across time array T. 
-# input: T (array)
+# input/2: T (array)
 # output: smooth sigmoid from 0 to 1 across T. 
-def minjerk(T):
-  t_end=T[-1]
-  return (10*(T/t_end)**3 - 15*(T/t_end)**4 + 6*(T/t_end)**5)
+def minjerk(theN:int):
+  T = np.linspace(0,1,int(theN))
+  return 10*(T)**3 - 15*(T)**4 + 6*(T)**5
 
 ### OBJECTIVE 
 def trapInt(t,inVec):
@@ -295,141 +273,141 @@ class SimpleModel:
     theDuration       = [], #if empty, we are optimizing for duration. 
     theDurationGuess  = .5,
     theHandMass       = 0.0,
-    discreteOrCont    = 'discrete'):
+    discreteOrCont    = 'discrete') -> optiParam:
 
+    #### the casadi instance of Opti helper class. 
     opti = ca.Opti()
+    oP   = optiParam(opti, N = theN) # we attach all symbolic opt variables to oP, to be returned.
     
-    ### Define STATE (Q), Acceleration (ddqdt2), force-rate, SLACKVARS, 
-    ### and Parameters: qstart, qend, timeValuation, frCoef 
-    Q         = opti.variable(self.DoF*4, theN+1)
-    ddqdt2    = opti.variable(self.DoF,   theN+1)      # optimal acceleration, for implicit equations of motion.
-    ddudt2    = opti.variable(self.DoF,   theN+1)     # Force rate
+    #### STATE (Q), Acceleration (ddqdt2), force-rate-rate
+    oP.Q         = opti.variable(self.DoF*4, theN+1)      # big-Q
+    oP.ddqdt2    = opti.variable(self.DoF,   theN+1)      # optimal acceleration, for implicit equations of motion.
+    oP.ddudt2    = opti.variable(self.DoF,   theN+1)      # Force rate
     
-    # slack variables
-    slackVars = opti.variable(self.DoF*3, theN+1)   # fully-actuated, constrain 1:fr_p, 2:fr_n, 3:power_p.
+    #### slack variables
+    slackVars = opti.variable(self.DoF*3, theN+1)   # for computing positive power, and +/- frr.
     
-    # parameters: these can change from opt to opt
-    qstart        = opti.parameter(self.DoF,1)
-    qend          = opti.parameter(self.DoF,1)
-    timeValuation = opti.parameter()
-    opti.set_value(timeValuation, theTimeValuation)
-    k_FR          = opti.parameter()
-    opti.set_value(k_FR, theFRCoef)
-    self.setHandMass(theHandMass)
+    #### parameters: 
+    # these can change from opt to opt without re-setting up the optimization.
+    oP.qstart        = opti.parameter(self.DoF,1)
+    oP.qend          = opti.parameter(self.DoF,1)
+    oP.timeValuation = opti.parameter()
+    opti.set_value(oP.timeValuation, theTimeValuation)
+    oP.kFR           = opti.parameter()
+    opti.set_value(oP.kFR, theFRCoef)
+    self.setHandMass(theHandMass) #this may be converted to parameter. but requires re-applying dynamics constraints.
     ###/ END State, acceleration (implicit method), force-rate, slack vars.
     
-    ### Define movement duration as either optimized, or fixed. 
-    ### Desirable: have the same code execute for movement time optimized and fixed.
+    #### Define movement duration as either optimized, or fixed. 
+    # Then this code can be used for both types of optimizations. 
     if not(theDuration):                        ### FIRST: optimized param: make it an opti.variable()
-      duration = opti.variable() 
-      opti.subject_to(duration > 0.0)           # critical!
-      opti.subject_to(duration <=20.0)          # maybe unnecessary! =)
-      durationInitial = theDurationGuess
-      opti.set_initial(duration,durationInitial)
-      time = ca.linspace(0., duration, theN+1)  # Discretized time vector
-      opti.subject_to(time[:] >= 0.) 
+      oP.duration = opti.variable() 
+      opti.subject_to(oP.duration >   0.0)           # critical!
+      opti.subject_to(oP.duration <= 20.0)          # maybe unnecessary! =)
+      opti.set_initial(oP.duration,theDurationGuess)
+      oP.time = ca.linspace(0., oP.duration, theN+1)  # Discretized time vector
+      opti.subject_to(oP.time[:] >= 0.) 
     else:                                       ### SECOND: fixed duration.
-      duration = theDuration
-      durationInitial = duration 
-      time = ca.linspace(0., duration, theN+1)  # Discretized time vector
-    dt = (duration)/theN
-    ###/
+      oP.duration = theDuration
+      oP.time     = ca.linspace(0., oP.duration, theN+1)  # Discretized time vector
+    dt = (oP.duration)/theN
 
     # extract columns of Q for handiness.
-    # position
-    q     = Q[0:2,:]
-    q1    = Q[0, :]
-    q2    = Q[1, :]
-    
-    dqdt  = Q[2:4,:] # velocity
-    u     = Q[4:6,:] # force
-    dudt  = Q[6:8,:] # force rate
+    oP.q     = oP.Q[self.DoF*0 : self.DoF*1, :] # position    
+    oP.dqdt  = oP.Q[self.DoF*1 : self.DoF*2, :] # velocity
+    oP.u     = oP.Q[self.DoF*2 : self.DoF*3, :] # force
+    oP.dudt  = oP.Q[self.DoF*3 : self.DoF*4, :] # force rate
     
     # Calculus equation constraint
-    def qd(qi, ui,acc): return ca.vertcat(qi[2], qi[3], acc[0], acc[1], qi[6],qi[7],ui[0],ui[1])  # dq/dt = f(q,u)
-    # Loop over discrete nodes and enforce calculus constraints. 
-    HermiteSimpsonImplicit(opti,qd,self.implicitEOMQ,Q,ddqdt2,ddudt2,dt,[2,3])
+    def qd(qi, ui, acc): 
+      return ca.vertcat(qi[2], qi[3], acc[0], acc[1], qi[6], qi[7], ui[0], ui[1])  # dq/dt = f(q,u)
     
-    # CONSTRAINTS (NON_TASK_SPECIFIC): BROAD BOX LIMITS
-    # variables will be bounded between +/- Inf).
-    # for i in range(0,q.shape[0]):
-    #   opti.subject_to(opti.bounded(-2*ca.pi, q[i,:], 2*ca.pi))
-
-    ##### SLACK VARIABLES: Primarily for power constraints, also for force rate. 
-    ### CONSTRAINTS (NON_TASK_SPECIFIC): SLACK VARIABLES FOR POWER
-    # # extract slack variables for power and force-rate-rate for handiness.
-    pPower = slackVars[0:self.DoF,         :]
+    #### IMPLEMENT DYNAMICS CONSTRAINTS. in subfunction, for now only HermiteSimpsonImplicit.
+    HermiteSimpsonImplicit(opti, qd, self.implicitEOMQ, oP.Q, oP.ddqdt2, oP.ddudt2, dt, [2,3])
+    
+    #### DEFINE SLACK VARIABLES: Primarily for power constraints, also for force rate. 
+    # extract slack variables for power
+    oP.pPower = slackVars[0:self.DoF,      :]
     pddu = slackVars[self.DoF:self.DoF*2,  :]
     nddu = slackVars[self.DoF*2:self.DoF*3,:]
 
-    mechPower = self.jointPower(dqdt,u)
+    oP.mechPower = self.jointPower(oP.dqdt,oP.u)
     # Constrain positive power variable 'pPower' 
-    opti.subject_to(pPower[0,:] >= 0.) 
-    opti.subject_to(pPower[1,:] >= 0.) 
-    opti.subject_to(pPower[0,:] >= mechPower[0,:]) 
-    opti.subject_to(pPower[1,:] >= mechPower[1,:]) 
+    opti.subject_to(oP.pPower[0,:] >= 0.) 
+    opti.subject_to(oP.pPower[1,:] >= 0.) 
+    opti.subject_to(oP.pPower[0,:] >= oP.mechPower[0,:]) 
+    opti.subject_to(oP.pPower[1,:] >= oP.mechPower[1,:]) 
     # Constrain positive and negative fraterate 
     opti.subject_to(pddu[0,:] >= 0.)  
     opti.subject_to(pddu[1,:] >= 0.)  
-    opti.subject_to(pddu[0,:] >= ddudt2[0,:])  
-    opti.subject_to(pddu[1,:] >= ddudt2[1,:])  
+    opti.subject_to(pddu[0,:] >= oP.ddudt2[0,:])  
+    opti.subject_to(pddu[1,:] >= oP.ddudt2[1,:])  
     opti.subject_to(nddu[0,:] <= 0.)  
     opti.subject_to(nddu[1,:] <= 0.)  
-    opti.subject_to(nddu[0,:] <= ddudt2[0,:]) 
-    opti.subject_to(nddu[1,:] <= ddudt2[1,:]) 
+    opti.subject_to(nddu[0,:] <= oP.ddudt2[0,:]) 
+    opti.subject_to(nddu[1,:] <= oP.ddudt2[1,:]) 
     
-    #################################### CONSTRAINTS: TASK-SPECIFIC (BOUNDARY CONSTRAINTS) ####################################
+    #### CONSTRAINTS: TASK-SPECIFIC (BOUNDARY CONSTRAINTS) ####
     # Boundary constraints. Often zeros
-    def initAndEndZeros(opti,list):
-      for var in list:
+    def initAndEndZeros(opti:ca.Opti,thelist):
+      for var in thelist:
         for dof in range(0,var.shape[0]):
-          opti.subject_to(var[dof,0] == 0.0)
+          opti.subject_to(var[dof, 0] == 0.0)
           opti.subject_to(var[dof,-1] == 0.0)
       
-    def initAndEndMatch(opti, list):
-        for var in list:
+    def initAndEndMatch(opti:ca.Opti, thelist):
+        for var in thelist:
           for dof in range(0, var.shape[0]):
             opti.subject_to(var[dof,0] == var[dof,-1])
     
+    # discrete or continuous
+    oP.discreteOrCont = discreteOrCont
     if discreteOrCont == 'continuous':
-      initAndEndMatch(opti,[dqdt,u,ddudt2,ddqdt2,pddu,nddu])  
+      initAndEndZeros(opti,[oP.dqdt])
+      initAndEndMatch(opti,[oP.u, oP.ddudt2, pddu, nddu])  
+      opti.subject_to(oP.q[:,0]       == oP.qstart)
+      opti.subject_to(oP.q[:,-1]      == oP.qstart)
+      opti.subject_to(oP.q[:,theN/2]  == oP.qend)
+      opti.subject_to(oP.dqdt[:,theN/2]  == 0)
+
     else:
-      initAndEndZeros(opti,[dqdt,u,ddudt2,ddqdt2,pddu,nddu])
+      initAndEndZeros(opti,[oP.dqdt, oP.u,oP.ddudt2,oP.ddqdt2,pddu,nddu])
+      opti.subject_to(oP.q[:,0]   == oP.qstart)
+      opti.subject_to(oP.q[:,-1]  == oP.qend)
     
-    opti.subject_to(q[:,0] == qstart)
-    opti.subject_to(q[:,-1] == qend)
-
-    ############################################################################################################################################
-    ############## OBJECTIVE ############## 
-    costTime  = time[-1] * timeValuation
-    k_Work    = theWorkCoef
-    costWork  = k_Work * (trapInt(time,pPower[0,:])+trapInt(time,pPower[1,:]))
-    costFR    = k_FR * (trapInt(time,pddu[0,:]) + trapInt(time,pddu[1,:]) - trapInt(time,nddu[0,:]) - trapInt(time,nddu[1,:]))
-    costJ     = costTime + costWork + costFR
+    #### OBJECTIVE ##### 
+    oP.costTime  = oP.time[-1] * oP.timeValuation
+    oP.kWork     = theWorkCoef
+    oP.costWork  = oP.kWork * (trapInt(oP.time,oP.pPower[0,:]) +\
+                               trapInt(oP.time,oP.pPower[1,:]))
+    oP.costFR    = oP.kFR *   (trapInt(oP.time, pddu[0,:]) +\
+                               trapInt(oP.time,pddu[1,:]) -\
+                               trapInt(oP.time,nddu[0,:]) -\
+                              trapInt(oP.time,nddu[1,:]))
+    oP.costJ     = oP.costTime + oP.costWork + oP.costFR
     # Set cost function
-    opti.minimize(costJ)
+    opti.minimize(oP.costJ)
 
-    ############################################################################################################################################
-    ############## Hyperparameters and solve ############## 
+    #### Hyperparameters and plotting function #### 
     maxIter = 1000
     pOpt = {"expand":True}
-    sOpt = {"max_iter": maxIter}
+    sOpt = {"max_iter"        : maxIter,
+            "constr_viol_tol" : 1e-2,
+            "dual_inf_tol"    : 1e-2}
     opti.solver('ipopt',pOpt,sOpt)
     def callbackPlots(i):
-        plt.plot(opti.debug.value(time),opti.debug.value(q1),
-          opti.debug.value(time), opti.debug.value(q2),color=(1,.8-.8*i/(maxIter),1))
+        plt.plot(opti.debug.value(oP.time),opti.debug.value(oP.q[0,:]),
+          opti.debug.value(oP.time), opti.debug.value(oP.q[1,:]),color=(1,.8-.8*i/(maxIter),1))
     opti.callback(callbackPlots)
 
-    return optiParam(opti,Q = Q, q = q, theQStart = qstart, theQEnd = qend, dqdt = dqdt,\
-       ddqdt2 = ddqdt2,u = u, dudt = dudt, ddudt2 = ddudt2, costJ = costJ, costFR = costFR, costWork = costWork, \
-         costTime = costTime, timeValuation = timeValuation, frCoef = k_FR, N = theN, time = time, duration = duration,mechPower = mechPower)
+    return oP
 
   def updateGuessAndSolve(self,
     oP:optiParam,
     xstartnew:np.ndarray,
     xendnew:np.ndarray,
-    theDurationGuess      = 1.0, \
-    theTimeValuation      = 1.0, \
+    theDurationGuess      = 1.0,
+    theTimeValuation      = 1.0,
     theGeneratePlots      = 1,
     theFRCoef             = 8.5e-2):
     
@@ -452,7 +430,7 @@ class SimpleModel:
     opti.set_value(oP.qstart,         qCON0)      
     opti.set_value(oP.qend,           qCON1)
     opti.set_value(oP.timeValuation,  theTimeValuation)
-    opti.set_value(oP.frCoef, theFRCoef)
+    opti.set_value(oP.kFR,            theFRCoef)
 
     # now update the time for guesses of the decision variables.
     if type(oP.duration) == float:
@@ -460,8 +438,14 @@ class SimpleModel:
       print("Leaving duration at setup: " + str(oP.duration) + " s.")
     else:
       opti.set_initial(oP.duration, theDurationGuess)  
-    tGuess = np.linspace(0,       theDurationGuess,  theN+1)
-    mj = minjerk(tGuess)
+    tGuess = np.linspace(0,theDurationGuess,theN+1)
+
+    # form guesses. 
+    mj = minjerk(theN+1)
+    if oP.discreteOrCont == 'continuous':
+      mj1 = minjerk(int(theN/2))
+      mj2 = minjerk(int(theN/2+1))
+      mj = np.concatenate([mj1,mj2[::-1]])
 
     nQ = q.shape[0]
     nT = q.shape[1]
@@ -590,7 +574,7 @@ class SimpleModel:
     # update the duration guess
     opti.set_initial(oP.duration, warmTraj.time[-1])
     tGuess = np.linspace(0,       warmTraj.time[-1],  theN+1)
-    mj = minjerk(tGuess)
+    mj = minjerk(theN)
 
     # what do we want to do? let's use the 
     nQ = q.shape[0]
@@ -680,7 +664,7 @@ class SimpleModel:
 
     opti = ca.Opti()
     # all opti variables will be attached to the oP instance of optiParam
-    oP = optiParam(opti)
+    oP = optiParam(opti,N = theN)
 
     ### Define STATE (Q), Acceleration (ddqdt2), force-rate, SLACKVARS, 
     ### and Parameters: qstart, qend, timeValuation, frCoef 
@@ -697,8 +681,8 @@ class SimpleModel:
     oP.yBoundary     = opti.parameter(1,1)
     oP.timeValuation = opti.parameter()
     opti.set_value(oP.timeValuation, theTimeValuation)
-    oP.frCoef        = opti.parameter()
-    opti.set_value(oP.frCoef, theFRCoef)
+    oP.kFR        = opti.parameter()
+    opti.set_value(oP.kFR, theFRCoef)
     ###/
     
     ### Define movement duration as either optimized, or fixed. 
@@ -782,7 +766,7 @@ class SimpleModel:
     ############## OBJECTIVE ############## 
     oP.costTime = oP.time[-1] * oP.timeValuation
     oP.costWork = trapInt(oP.time, pPower[0,:])+trapInt(oP.time, pPower[1,:])
-    oP.costFR = oP.frCoef * (trapInt(oP.time,pddu[0,:]) + trapInt(oP.time,pddu[1,:]) - trapInt(oP.time,nddu[0,:]) - trapInt(oP.time,nddu[1,:]))
+    oP.costFR = oP.kFR * (trapInt(oP.time,pddu[0,:]) + trapInt(oP.time,pddu[1,:]) - trapInt(oP.time,nddu[0,:]) - trapInt(oP.time,nddu[1,:]))
     oP.costJ = oP.costTime + oP.costWork + oP.costFR
     # Set cost function
     opti.minimize(oP.costJ)
@@ -1331,9 +1315,9 @@ class SimpleModel:
   #     opti.set_initial(u[1,:], sinTorque)
 
   #   else:#complicated guess. minjerk trajectory in q. 
-  #     # construct minjerk guesses
-  #     tGuess = np.linspace(0,durationInitial,theN+1)
-  #     mj = minjerk(tGuess)
+  #     # construct minjerk guess/2es
+  #     tGuess = np.linsp/2ace(0,durationInitial,theN+1)
+  #     mj = minjerk(tGuess/2)
 
   #     qGuess = np.zeros([q.shape[0],q.shape[1]])
   #     for qloop in range(0,q.shape[0]):
