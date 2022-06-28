@@ -2,6 +2,7 @@
 import numpy as np
 import casadi as ca
 import scipy.io as io 
+import os
 import scipy.integrate as integ
 import scipy.interpolate as interp
 import numpy as np
@@ -86,9 +87,10 @@ class Kinarm(so.SimpleModel):
   # def __init__ -> kinarmModel(fname)
   # input (optional): location of .mat param file.
   # output: class that has parameters set according to the file.
-  def __init__(self,fname='/users/jeremy/Git/optreach/parameterFiles/paramsKinarmValidated80KgSubj.mat'):
-    #fname='/users/jeremy/Git/optreach/parameterFiles/paramsKinarmValidated80KgSubj.mat'
-    self.parms = io.loadmat(fname)
+  def __init__(self,fname='paramsKinarmValidated80KgSubj.mat'):
+    kinarmPath = os.path.dirname(so.__file__)
+    self.parms = io.loadmat(kinarmPath + '/parameterFiles/' + fname) #load test data (change path)
+
     self.m1 = self.parms["L1_M"].flatten()[0]
     self.m2 = self.parms["L2_M"].flatten()[0]
     self.m3 = self.parms["L3_M"].flatten()[0]

@@ -4,6 +4,7 @@ import casadi as ca
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.integrate as integ
+import scipy.interpolate 
 
 class optTrajectories:
   mechPower = np.array([0])
@@ -365,10 +366,10 @@ class SimpleModel:
     if discreteOrCont == 'continuous':
       initAndEndZeros(opti,[oP.dqdt])
       initAndEndMatch(opti,[oP.u, oP.ddudt2, pddu, nddu])  
-      opti.subject_to(oP.q[:,0]       == oP.qstart)
-      opti.subject_to(oP.q[:,-1]      == oP.qstart)
-      opti.subject_to(oP.q[:,theN/2]  == oP.qend)
-      opti.subject_to(oP.dqdt[:,theN/2]  == 0)
+      opti.subject_to(oP.q[:,0]           == oP.qstart)
+      opti.subject_to(oP.q[:,-1]          == oP.qstart)
+      opti.subject_to(oP.q[:,theN/2]      == oP.qend)
+      opti.subject_to(oP.dqdt[:,theN/2]   == 0)
 
     else:
       initAndEndZeros(opti,[oP.dqdt, oP.u,oP.ddudt2,oP.ddqdt2,pddu,nddu])
@@ -381,9 +382,9 @@ class SimpleModel:
     oP.costWork  = oP.kWork * (trapInt(oP.time,oP.pPower[0,:]) +\
                                trapInt(oP.time,oP.pPower[1,:]))
     oP.costFR    = oP.kFR *   (trapInt(oP.time, pddu[0,:]) +\
-                               trapInt(oP.time,pddu[1,:]) -\
-                               trapInt(oP.time,nddu[0,:]) -\
-                              trapInt(oP.time,nddu[1,:]))
+                               trapInt(oP.time, pddu[1,:]) -\
+                               trapInt(oP.time, nddu[0,:]) -\
+                               trapInt(oP.time, nddu[1,:]))
     oP.costJ     = oP.costTime + oP.costWork + oP.costFR
     # Set cost function
     opti.minimize(oP.costJ)
@@ -542,6 +543,148 @@ class SimpleModel:
       failTraj.duration  = opti.debug.value(oP.duration)
       
       return failTraj, oP
+
+  def interpolateGuessAndSolve(self,
+    oPLow:optiParam,
+    oPHigh:optiParam,
+    theGeneratePlots = True):
+    
+    # unpack the opti variables for ease of use. 
+    theHighN    = oPHigh.N                       # number of nodes
+    
+
+    tLow    = oPLow.opti.value(oPLow.time)
+    tGuess  = np.linspace(0,tLow[-1],theHighN+1)
+     
+    # if type(oPLow.duration) == float:
+    #   theDurationGuess = oPLow.duration
+    #   print("Leaving duration at setup: " + str(oPLow.duration) + " s.")
+    # else:
+    #   oPHigh.opti.set_initial(oPHigh.duration, oPLow.opti.value(oPLow.duration))  
+
+    #### update the parameters of the optimization:
+    # endpoint constraints
+    # force rate.
+    # time valuation. 
+    # JDW: should consider adding kWork.
+    oPHigh.opti.set_value(oPHigh.qstart,         oPLow.opti.value(oPLow.qstart))      
+    oPHigh.opti.set_value(oPHigh.qend,           oPLow.opti.value(oPLow.qend))
+    oPHigh.opti.set_value(oPHigh.timeValuation,  oPLow.opti.value(oPLow.timeValuation))
+    oPHigh.opti.set_value(oPHigh.kFR,            oPLow.opti.value(oPLow.costFR))
+
+
+    #### interpolate
+    mj = minjerk(theHighN+1)
+    if oPLow.discreteOrCont == 'continuous':
+      mj1 = minjerk(int(theHighN/2))
+      mj2 = minjerk(int(theHighN/2+1))
+      mj = np.concatenate([mj1,mj2[::-1]])
+
+    nQ = oPHigh.q.shape[0]
+    nT = oPHigh.q.shape[1]
+
+    tempGuess = np.zeros([nQ,nT])
+    for qloop in range(0,oPHigh.q.shape[0]):
+      lowVal                = oPLow.opti.value(oPLow.q)
+      modelTemp           = scipy.interpolate.splrep(tLow, lowVal[qloop,:], s=3) #build a spline representation of C. s=0 means no smoothing
+      tempGuess[qloop,:]  = scipy.interpolate.splev(tGuess,modelTemp)
+    oPHigh.opti.set_initial(oPHigh.q, tempGuess)
+    
+    tempGuess = np.zeros([nQ,nT])
+    for qloop in range(0,oPHigh.dqdt.shape[0]):
+      lowVal              = oPLow.opti.value(oPLow.dqdt)
+      modelTemp           = scipy.interpolate.splrep(tLow, lowVal[qloop,:], s=3) #build a spline representation of C. s=0 means no smoothing
+      tempGuess[qloop,:]  = scipy.interpolate.splev(tGuess,modelTemp)
+    oPHigh.opti.set_initial(oPHigh.dqdt, tempGuess)
+
+    tempGuess = np.zeros([nQ,nT])
+    for qloop in range(0,oPHigh.ddqdt2.shape[0]):
+      lowVal              = oPLow.opti.value(oPLow.ddqdt2)
+      modelTemp           = scipy.interpolate.splrep(tLow, lowVal[qloop,:], s=3) #build a spline representation of C. s=0 means no smoothing
+      tempGuess[qloop,:]  = scipy.interpolate.splev(tGuess,modelTemp)
+    oPHigh.opti.set_initial(oPHigh.ddqdt2, tempGuess)
+
+    tempGuess = np.zeros([nQ,nT])
+    for qloop in range(0,oPHigh.u.shape[0]):
+      lowVal              = oPLow.opti.value(oPLow.u)
+      modelTemp           = scipy.interpolate.splrep(tLow, lowVal[qloop,:], s=3) #build a spline representation of C. s=0 means no smoothing
+      tempGuess[qloop,:]  = scipy.interpolate.splev(tGuess,modelTemp)
+    oPHigh.opti.set_initial(oPHigh.u, tempGuess)
+    
+    tempGuess = np.zeros([nQ,nT])
+    for qloop in range(0,oPHigh.dudt.shape[0]):
+      lowVal              = oPLow.opti.value(oPLow.dudt)
+      modelTemp           = scipy.interpolate.splrep(tLow, lowVal[qloop,:], s=3) #build a spline representation of C. s=0 means no smoothing
+      tempGuess[qloop,:]  = scipy.interpolate.splev(tGuess,modelTemp)
+    oPHigh.opti.set_initial(oPHigh.dudt, tempGuess)
+
+    tempGuess = np.zeros([nQ,nT])
+    for qloop in range(0,oPHigh.ddudt2.shape[0]):
+      lowVal              = oPLow.opti.value(oPLow.ddudt2)
+      modelTemp           = scipy.interpolate.splrep(tLow, lowVal[qloop,:], s=3) #build a spline representation of C. s=0 means no smoothing
+      tempGuess[qloop,:]  = scipy.interpolate.splev(tGuess,modelTemp)
+    oPHigh.opti.set_initial(oPHigh.ddudt2, tempGuess)
+
+    try:
+      sol = oPHigh.opti.solve()
+    
+    ############################################################################################################################################
+    ############## Post optimization ############## 
+    # Extract the optimal states and controls.
+      optTraj = optTrajectories(solved = True)
+      optTraj.time      = sol.value(oPHigh.time)
+      optTraj.Q         = sol.value(oPHigh.q)
+      optTraj.QDot      = sol.value(oPHigh.dqdt)
+      optTraj.U         = sol.value(oPHigh.u)
+      optTraj.mechPower = sol.value(oPHigh.mechPower)
+      optTraj.costJ     = sol.value(oPHigh.costJ)
+      optTraj.costTime  = sol.value(oPHigh.costTime)
+      optTraj.costWork  = sol.value(oPHigh.costWork)
+      optTraj.costFR    = sol.value(oPHigh.costFR)
+      optTraj.uraterate = sol.value(oPHigh.ddudt2)
+      optTraj.duration  = sol.value(oPHigh.duration)
+
+      ### compute peak handspeed and peak speed
+      handspeed_opt = np.zeros([optTraj.Q.shape[1]])
+      for i in range(0,optTraj.U.shape[1]):
+        qtemp                 = np.array([optTraj.Q[0,i],optTraj.Q[1,i]])
+        qdottemp              = np.array([optTraj.QDot[0,i],optTraj.QDot[1,i]])
+        handspeed_opt[i],dum  = self.handspeed(qtemp,qdottemp)
+      
+      optTraj.handspeed     = handspeed_opt
+      optTraj.peakhandspeed = max(handspeed_opt)
+      ### /compute peak handspeed and peak speed
+      
+      hand_opt = np.zeros([2,optTraj.Q.shape[1]])
+      for i in range(0,optTraj.U.shape[1]):
+        qtemp = np.array([optTraj.Q[0,i],optTraj.Q[1,i]])
+        hand_opt[:,i:i+1] = self.joints2Endpoint(qtemp)
+      optTraj.hand = hand_opt
+      
+
+      # plot
+      if theGeneratePlots:
+        optTraj.generatePlots()
+
+      #return solution
+      return optTraj, oPHigh
+    except:
+      print("Caught: post-opti.solve() failed. Check either the first output, or the subsequent plotting code.\n")
+      failTraj = optTrajectories(solved = False)
+      failTraj.time      = oPHigh.opti.debug.value(oPHigh.time)
+      failTraj.Q         = oPHigh.opti.debug.value(oPHigh.q)
+      failTraj.QDot      = oPHigh.opti.debug.value(oPHigh.dqdt)
+      failTraj.U         = oPHigh.opti.debug.value(oPHigh.u)
+      failTraj.mechPower = oPHigh.opti.debug.value(oPHigh.mechPower)
+      failTraj.costJ     = oPHigh.opti.debug.value(oPHigh.costJ)
+      failTraj.costTime  = oPHigh.opti.debug.value(oPHigh.costTime)
+      failTraj.costWork  = oPHigh.opti.debug.value(oPHigh.costWork)
+      failTraj.costFR    = oPHigh.opti.debug.value(oPHigh.costFR)
+      failTraj.uraterate = oPHigh.opti.debug.value(oPHigh.ddudt2)
+      failTraj.duration  = oPHigh.opti.debug.value(oPHigh.duration)
+      
+      return failTraj, oPHigh
+
 
   def solvewithWarmTraj(self,oP:optiParam, xstartnew:np.ndarray, xendnew:np.ndarray, warmTraj:optTrajectories, \
     theTimeValuation  = 1.0, \
@@ -922,7 +1065,7 @@ class SimpleModel:
 
     opti = ca.Opti()
     # all opti variables will be attached to the oP instance of optiParam
-    oP = optiParam(opti)
+    oP = optiParam(opti,theN)
 
     ### Define STATE (Q), Acceleration (ddqdt2), force-rate, SLACKVARS, 
     ### and Parameters: qstart, qend, timeValuation, frCoef 
@@ -1068,7 +1211,7 @@ class SimpleModel:
     # now update the guess
     opti.set_initial(oP.duration, theDurationGuess)
     tGuess = np.linspace(0,       theDurationGuess,  theN+1)
-    mj = minjerk(tGuess)
+    mj = minjerk(theN+1)
 
     #start
     oP.handEnd = self.joints2Endpoint(q[:,-1])

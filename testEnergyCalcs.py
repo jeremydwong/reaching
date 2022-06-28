@@ -10,25 +10,35 @@ loopValuation = [1,2,3]
 color1 = clr.Color("#e0f3db")
 distcolors = list(color1.range_to(clr.Color("#084081"),len(loopValuation)))
 
-sim = reaching.Kinarm()
+sim = reaching.DoublePendulum()
 #%config InlineBackend.figure_formats = ['svg']
 
 tstart = time.time()
 prevSol = []
 dGuess = 1.0
-optiPrev = sim.movementTimeOptSetup(
+optiLow = sim.movementTimeOptSetup(
   theTimeValuation  = 1.0, 
-  theN              = 100,
-  discreteOrCont='continuous',
-  theDuration =.5)  
+  theN              = 20,
+  discreteOrCont='continuous')  
 
-xystart = np.array([0,0.2])
+xystart = np.array([-.10,0.2])
 
-trajOrig, opti1 = sim.updateGuessAndSolve(optiPrev, 
+trajOrig, opti1 = sim.updateGuessAndSolve(optiLow, 
   xystart, 
   xystart + np.array([0,.1]), 
   theTimeValuation = 1,
   theGeneratePlots = 1)
+
+tstart = time.time()
+prevSol = []
+dGuess = 1.0
+optiHigh = sim.movementTimeOptSetup(
+  theTimeValuation  = 1.0, 
+  theN              = 100,
+  discreteOrCont='continuous')  
+
+
+a,b=sim.interpolateGuessAndSolve(opti1,optiHigh)
 
 #%%
 tend = time.time()
