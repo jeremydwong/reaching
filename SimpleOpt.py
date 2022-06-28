@@ -381,7 +381,7 @@ class SimpleModel:
     oP.kWork     = theWorkCoef
     oP.costWork  = oP.kWork * (trapInt(oP.time,oP.pPower[0,:]) +\
                                trapInt(oP.time,oP.pPower[1,:]))
-    oP.costFR    = oP.kFR *   (trapInt(oP.time, pddu[0,:]) +\
+    oP.costFR    = oP.time[-1] * oP.kFR * (trapInt(oP.time, pddu[0,:]) +\
                                trapInt(oP.time, pddu[1,:]) -\
                                trapInt(oP.time, nddu[0,:]) -\
                                trapInt(oP.time, nddu[1,:]))
@@ -908,8 +908,8 @@ class SimpleModel:
     ############################################################################################################################################
     ############## OBJECTIVE ############## 
     oP.costTime = oP.time[-1] * oP.timeValuation
-    oP.costWork = trapInt(oP.time, pPower[0,:])+trapInt(oP.time, pPower[1,:])
-    oP.costFR = oP.kFR * (trapInt(oP.time,pddu[0,:]) + trapInt(oP.time,pddu[1,:]) - trapInt(oP.time,nddu[0,:]) - trapInt(oP.time,nddu[1,:]))
+    oP.costWork = oP.kWork * trapInt(oP.time, pPower[0,:])+trapInt(oP.time, pPower[1,:])
+    oP.costFR = oP.time[-1] * oP.kFR * (trapInt(oP.time,pddu[0,:]) + trapInt(oP.time,pddu[1,:]) - trapInt(oP.time,nddu[0,:]) - trapInt(oP.time,nddu[1,:]))
     oP.costJ = oP.costTime + oP.costWork + oP.costFR
     # Set cost function
     opti.minimize(oP.costJ)
@@ -1165,7 +1165,7 @@ class SimpleModel:
     ############## OBJECTIVE ############## 
     oP.costTime = oP.time[-1] * oP.timeValuation
     oP.costWork = trapInt(oP.time, pPower[0,:])+trapInt(oP.time, pPower[1,:])
-    oP.costFR = oP.frCoef * (trapInt(oP.time,pddu[0,:]) + trapInt(oP.time,pddu[1,:]) - trapInt(oP.time,nddu[0,:]) - trapInt(oP.time,nddu[1,:]))
+    oP.costFR = oP.time[-1] * oP.frCoef * (trapInt(oP.time,pddu[0,:]) + trapInt(oP.time,pddu[1,:]) - trapInt(oP.time,nddu[0,:]) - trapInt(oP.time,nddu[1,:]))
     oP.costJ = oP.costTime + oP.costWork + oP.costFR
     # Set cost function
     opti.minimize(oP.costJ)
