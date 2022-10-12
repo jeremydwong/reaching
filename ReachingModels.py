@@ -7,8 +7,13 @@ import scipy.integrate as integ
 import scipy.interpolate as interp
 import numpy as np
 import matplotlib.pyplot as plt
+import SimpleOpt as so  
+import matplotlib.animation as an
+import matplotlib.transforms as transforms
+
 from numpy.core.function_base import linspace
-import SimpleOpt as so
+from IPython import display
+from matplotlib.patches import Ellipse
 
 class PointMass(so.SimpleModel):
   g = 0
@@ -55,6 +60,9 @@ class PointMass(so.SimpleModel):
     # this is different than the other classes; do nothing.  
     return 0
 
+  def joints2Endpoint(self, q):
+    return super().joints2Endpoint(q)
+
 class Kinarm(so.SimpleModel):
   DoF = 2
   NActuators = 2
@@ -84,7 +92,7 @@ class Kinarm(so.SimpleModel):
   ca4 = 0
   Q25 = 0
 
-  # def __init__ -> kinarmModel(fname)
+  # def __init__ -> Kinarm(fname)
   # input (optional): location of .mat param file.
   # output: class that has parameters set according to the file.
   def __init__(self,fname='paramsKinarmValidated80KgSubj.mat'):
@@ -231,8 +239,12 @@ class Kinarm(so.SimpleModel):
     return [r1,r2,r3,r4,r5,r6,r7]
 
   def joints2Endpoint(self, q):
-      return ca.vertcat(self.l[0]*ca.cos(q[0])+self.l[1]*ca.cos(q[0]+q[1]),\
-        self.l[0]*ca.sin(q[0])+self.l[1]*ca.sin(q[0]+q[1]))
+      return np.array([self.l[0]*ca.cos(q[0])+self.l[1]*ca.cos(q[0]+q[1]),
+        self.l[0]*ca.sin(q[0])+self.l[1]*ca.sin(q[0]+q[1])])
+
+  def joints2EndpointSymbolic(self,q):
+    return ca.vertcat(self.l[0]*ca.cos(q[0])+self.l[1]*ca.cos(q[1]),
+            self.l[0]*ca.sin(q[0])+self.l[1]*ca.sin(q[1]))
 
   def heightsMasses(self,q):
     q1 = q[0]
@@ -347,8 +359,14 @@ class DoublePendulum(so.SimpleModel):
     return [j_uarm, j_larm, j_hand]
   
   def joints2Endpoint(self, q):
-      return ca.vertcat(self.l[0]*ca.cos(q[0])+self.l[1]*ca.cos(q[1]),\
-        self.l[0]*ca.sin(q[0])+self.l[1]*ca.sin(q[1]))
+      #return ca.vertcat(self.l[0]*ca.cos(q[0])+self.l[1]*ca.cos(q[1]),\
+      #  self.l[0]*ca.sin(q[0])+self.l[1]*ca.sin(q[1]))
+      return np.array([self.l[0]*ca.cos(q[0])+self.l[1]*ca.cos(q[1]),
+            self.l[0]*ca.sin(q[0])+self.l[1]*ca.sin(q[1])])
+
+  def joints2EndpointSymbolic(self,q):
+    return ca.vertcat(self.l[0]*ca.cos(q[0])+self.l[1]*ca.cos(q[1]),
+            self.l[0]*ca.sin(q[0])+self.l[1]*ca.sin(q[1]))
 
   # returns the global (inertial reference frame) angular velocities of the segments
   def kinematicJacobianRotationalInertias(self):
@@ -462,5 +480,96 @@ class DoublePendulum(so.SimpleModel):
     #eqs = MassMat @ accs - F - G - taus
     return ca.vertcat(e1,e2)
 
-  
+  def elbow(self,q):
+    return np.array([self.l[0]*np.cos(q[0]),self.l[1]*np.sin(q[0])])
+
+  def animate(self, simOut:so.optTrajectories, fname="anim.gif"):
     
+    pmain = "main"
+    ptorque = "torque"
+    ppower = "power"
+    pfrr = "frr"
+    pspeed = "speed"
+    pbreak = "break"
+    
+    fig = plt.figure()
+    axs = fig.subplot_mosaic([
+      [pmain, pmain,  ptorque],
+      [pmain, pmain,  pfrr],
+      [pspeed,pbreak, ppower]
+    ])
+    
+    def animate_fn(ii):
+      
+      #hand speed
+      axs.get(pspeed).clear()
+      axs.get(pspeed).plot(simOut.time[0:ii],simOut.handspeed[0:ii])  
+      axs.get(pspeed).set_xlim(0,simOut.time[-1])
+      axs.get(pspeed).set_ylim(min(simOut.handspeed),max(simOut.handspeed))
+
+      axs.get(ptorque).clear()
+      axs.get(ptorque).plot(simOut.time[0:ii],simOut.U[0,0:ii])
+      axs.get(ptorque).plot(simOut.time[0:ii],simOut.U[1,0:ii])
+      axs.get(ptorque).set_xlim(0,simOut.time[-1])
+      axs.get(ptorque).set_ylim(simOut.U.min(),simOut.U.max())
+
+      axs.get(pfrr).clear()
+      axs.get(pfrr).plot(simOut.time[0:ii],simOut.uraterate[0,0:ii])
+      axs.get(pfrr).plot(simOut.time[0:ii],simOut.uraterate[1,0:ii])
+      axs.get(pfrr).set_xlim(0,simOut.time[-1])
+      axs.get(pfrr).set_ylim(simOut.uraterate.min(),simOut.uraterate.max())
+
+      axs.get(ppower).clear()
+      axs.get(ppower).plot(simOut.time[0:ii],simOut.mechPower[0,0:ii])
+      axs.get(ppower).plot(simOut.time[0:ii],simOut.mechPower[1,0:ii])
+      axs.get(ppower).set_xlim(0,simOut.time[-1])
+      axs.get(ppower).set_ylim(simOut.mechPower.min(),simOut.mechPower.max())
+
+      # the hand in space. 
+      if ii>0: 
+        ib = ii-1 
+      else: 
+        ib = 0
+      
+      axs.get(pmain).clear()
+      axs.get(pmain).plot(simOut.hand[0,0:ib],simOut.hand[1,0:ib])
+      axs.get(pmain).plot(simOut.hand[0,0:ib],simOut.hand[1,0:ib])
+      axs.get(pmain).plot(simOut.hand[0,ii],  simOut.hand[1,ii])
+      axs.get(pmain).plot(simOut.hand[0,ii],  simOut.hand[1,ii])
+      axs.get(pmain).set_xlim(-.4,.8)
+      axs.get(pmain).set_ylim(-.4,.8)
+      elbow = self.elbow(simOut.Q[:,ii])
+      
+      ellipse = Ellipse((0, 0), width=self.l[0], height=0.05,
+                      facecolor="forestgreen",alpha = 0.5)
+      uax = (elbow[0] + 0.0)/2.0
+      uay = (elbow[1] + 0.0)/2.0
+      transf = transforms.Affine2D() \
+        .rotate(simOut.Q[0,ii]) \
+        .scale(1, 1) \
+        .translate(uax, uay)
+      ellipse.set_transform(transf + axs.get(pmain).transData)
+      axs.get(pmain).add_patch(ellipse)
+
+      ellipselow = Ellipse((0, 0), width=self.l[1], height=0.03,
+                      facecolor="forestgreen",alpha = 0.5)
+      lax = (simOut.hand[0,ii] + elbow[0])/2.0
+      lay = (simOut.hand[1,ii] + elbow[1])/2.0
+      transfLow = transforms.Affine2D() \
+        .rotate(simOut.Q[1,ii]) \
+        .scale(1, 1) \
+        .translate(lax, lay)
+      ellipselow.set_transform(transfLow + axs.get(pmain).transData)
+      axs.get(pmain).add_patch(ellipselow)
+
+    num_frames = len(simOut.time)
+    t_dur_animation = simOut.time[-1]
+    interval_frame = t_dur_animation/num_frames*2.0
+    animation = an.FuncAnimation(fig, animate_fn, frames = num_frames,interval = interval_frame)
+    animation.save(fname)
+    #video = animation.to_html5_video()
+    #html = display.HTML(video)
+    #display.display(html)
+    #plt.close() 
+    plt.show()
+    return animation
