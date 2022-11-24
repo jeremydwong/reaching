@@ -52,86 +52,86 @@ def invDynKinarmVirtualPower(theQ,theQDot,theQDDot,robTor,P):
 # cHandMass (axial distance from elbow joint to added mass)
 # this uses equations of motion derived using virtual power.
 
-m1 = P.L1_M
-m2 = P.L2_M
-m3 = P.L3_M
-m4 = P.L4_M
+  m1 = P.L1_M
+  m2 = P.L2_M
+  m3 = P.L3_M
+  m4 = P.L4_M
 
-I1 = P.L1_I
-I2 = P.L2_I
-I3 = P.L3_I
-I4 = P.L4_I
+  I1 = P.L1_I
+  I2 = P.L2_I
+  I3 = P.L3_I
+  I4 = P.L4_I
 
-Imot1 = P.MOTOR1_I
-Imot2 = P.MOTOR2_I
+  Imot1 = P.MOTOR1_I
+  Imot2 = P.MOTOR2_I
 
-if hasattr(P,"IHandMass"):
-    IHandMass = P.IHandMass
-    mHandMass = P.mHandMass
-    cHandMass = P.cHandMass
-else:
-    IHandMass = 0
-    mHandMass = 0
-    cHandMass = 0
+  if hasattr(P,"IHandMass"):
+      IHandMass = P.IHandMass
+      mHandMass = P.mHandMass
+      cHandMass = P.cHandMass
+  else:
+      IHandMass = 0
+      mHandMass = 0
+      cHandMass = 0
 
 
-l1 = P.L1_L
-l3 = P.L3_L
-cx1 = P.L1_C_AXIAL
-ca1 = P.L1_C_ANTERIOR
-cx2 = P.L2_C_AXIAL
-ca2 = P.L2_C_ANTERIOR
-cx3 = P.L3_C_AXIAL
-ca3 = P.L3_C_ANTERIOR
-cx4 = P.L4_C_AXIAL
-ca4 = P.L4_C_ANTERIOR
-Q25 = P.L2_L5_ANGLE
+  l1 = P.L1_L
+  l3 = P.L3_L
+  cx1 = P.L1_C_AXIAL
+  ca1 = P.L1_C_ANTERIOR
+  cx2 = P.L2_C_AXIAL
+  ca2 = P.L2_C_ANTERIOR
+  cx3 = P.L3_C_AXIAL
+  ca3 = P.L3_C_ANTERIOR
+  cx4 = P.L4_C_AXIAL
+  ca4 = P.L4_C_ANTERIOR
+  Q25 = P.L2_L5_ANGLE
 
-#iloop =1:1:length(theQ)
-iloop = np.arange(0,theQ.shape[0])
-q1 = theQ[iloop,0]
-q2 = theQ[iloop,1]
-q1dot = theQDot[iloop,0]
-q2dot = theQDot[iloop,1]
-qddot1 = theQDDot[iloop,0]
-qddot2 = theQDDot[iloop,1]
-curRobTor1 = robTor[iloop,0]
-curRobTor2 = robTor[iloop,1]
+  #iloop =1:1:length(theQ)
+  iloop = np.arange(0,theQ.shape[0])
+  q1 = theQ[iloop,0]
+  q2 = theQ[iloop,1]
+  q1dot = theQDot[iloop,0]
+  q2dot = theQDot[iloop,1]
+  qddot1 = theQDDot[iloop,0]
+  qddot2 = theQDDot[iloop,1]
+  curRobTor1 = robTor[iloop,0]
+  curRobTor2 = robTor[iloop,1]
 
-M11 = I1 + I4 + Imot1 + ca1**2*m1 + ca4**2*m4 + cx1**2*m1 + cx4**2*m4 + l1**2*m2 + l1**2*mHandMass
-M12 = cx2*l1*m2*ci.cos(q1 - q2) - ca4*l3*m4*ci.sin(Q25 + q1 - q2) + cHandMass*l1*mHandMass*ci.cos(q1 - q2) + ca2*l1*m2*ci.sin(q1 - q2) + cx4*l3*m4*ci.cos(Q25 + q1 - q2)
-#M21 = cx2*l1*m2*ci.cos(q1 - q2) - ca4*l3*m4*ci.sin(Q25 + q1 - q2) + cHandMass*l1*mHandMass*ci.cos(q1 - q2) + ca2*l1*m2*ci.sin(q1 - q2) + cx4*l3*m4*ci.cos(Q25 + q1 - q2),
-M22 = mHandMass*cHandMass**2 + m2*ca2**2 + m3*ca3**2 + m2*cx2**2 + m3*cx3**2 + m4*l3**2 + I2 + I3 + IHandMass + Imot2
-M21 = M12 #Kane/Lagrange derivations produce a symmetric mass matrix.
+  M11 = I1 + I4 + Imot1 + ca1**2*m1 + ca4**2*m4 + cx1**2*m1 + cx4**2*m4 + l1**2*m2 + l1**2*mHandMass
+  M12 = cx2*l1*m2*ci.cos(q1 - q2) - ca4*l3*m4*ci.sin(Q25 + q1 - q2) + cHandMass*l1*mHandMass*ci.cos(q1 - q2) + ca2*l1*m2*ci.sin(q1 - q2) + cx4*l3*m4*ci.cos(Q25 + q1 - q2)
+  #M21 = cx2*l1*m2*ci.cos(q1 - q2) - ca4*l3*m4*ci.sin(Q25 + q1 - q2) + cHandMass*l1*mHandMass*ci.cos(q1 - q2) + ca2*l1*m2*ci.sin(q1 - q2) + cx4*l3*m4*ci.cos(Q25 + q1 - q2),
+  M22 = mHandMass*cHandMass**2 + m2*ca2**2 + m3*ca3**2 + m2*cx2**2 + m3*cx3**2 + m4*l3**2 + I2 + I3 + IHandMass + Imot2
+  M21 = M12 #Kane/Lagrange derivations produce a symmetric mass matrix.
 
-meanMs = np.ndarray(2,2)
-meanMs[0,0] = np.mean(M11)
-meanMs[0,1] = np.mean(M12)
-meanMs[1,0] = np.mean(M21)
-meanMs[1,1] = np.mean(M22)
-#Ms = [repmat(M11,M12.shape[0],1),M12,M21,repmat(M22,length(M12),1)]
+  meanMs = np.ndarray(2,2)
+  meanMs[0,0] = np.mean(M11)
+  meanMs[0,1] = np.mean(M12)
+  meanMs[1,0] = np.mean(M21)
+  meanMs[1,1] = np.mean(M22)
+  #Ms = [repmat(M11,M12.shape[0],1),M12,M21,repmat(M22,length(M12),1)]
 
-F1 = -q2dot**2*(cx4*l3*m4*ci.sin(Q25 + q1 - q2) - ca2*l1*m2*ci.cos(q1 - q2) + cx2*l1*m2*ci.sin(q1 - q2) + cHandMass*l1*mHandMass*ci.sin(q1 - q2) + ca4*l3*m4*ci.cos(Q25 + q1 - q2))
-F2 = q1dot**2*(cx4*l3*m4*ci.sin(Q25 + q1 - q2) - ca2*l1*m2*ci.cos(q1 - q2) + cx2*l1*m2*ci.sin(q1 - q2) + cHandMass*l1*mHandMass*ci.sin(q1 - q2) + ca4*l3*m4*ci.cos(Q25 + q1 - q2))
+  F1 = -q2dot**2*(cx4*l3*m4*ci.sin(Q25 + q1 - q2) - ca2*l1*m2*ci.cos(q1 - q2) + cx2*l1*m2*ci.sin(q1 - q2) + cHandMass*l1*mHandMass*ci.sin(q1 - q2) + ca4*l3*m4*ci.cos(Q25 + q1 - q2))
+  F2 = q1dot**2*(cx4*l3*m4*ci.sin(Q25 + q1 - q2) - ca2*l1*m2*ci.cos(q1 - q2) + cx2*l1*m2*ci.sin(q1 - q2) + cHandMass*l1*mHandMass*ci.sin(q1 - q2) + ca4*l3*m4*ci.cos(Q25 + q1 - q2))
 
-#matrix multiply manual for vectorization.
-#M ddq = F+[u1-u2u2]
-#DDQ = [qddot1qddot2]
-#M = [M11,M12M21,M22]
-tausNet1 = M11 * qddot1 + M12*qddot2 - F1 - curRobTor1 + curRobTor2
-tausNet2 = M21 * qddot1 + M22*qddot2 - F2 - curRobTor2
+  #matrix multiply manual for vectorization.
+  #M ddq = F+[u1-u2u2]
+  #DDQ = [qddot1qddot2]
+  #M = [M11,M12M21,M22]
+  tausNet1 = M11 * qddot1 + M12*qddot2 - F1 - curRobTor1 + curRobTor2
+  tausNet2 = M21 * qddot1 + M22*qddot2 - F2 - curRobTor2
 
-tauGlobal0 = tausNet1 + tausNet2
-tauGlobal1 = tausNet2
-tauGlobal = ci.horzcat(tauGlobal0,tauGlobal1)
-tauG = ci.T(tauGlobal[iloop,:])
-tauL = tauGlob2Loc(tauG)
-tauLocal = ci.T(tauL) #because i've organized tau as row vecs.
+  tauGlobal0 = tausNet1 + tausNet2
+  tauGlobal1 = tausNet2
+  tauGlobal = ci.horzcat(tauGlobal0,tauGlobal1)
+  tauG = ci.T(tauGlobal[iloop,:])
+  tauL = tauGlob2Loc(tauG)
+  tauLocal = ci.T(tauL) #because i've organized tau as row vecs.
 
-powerSho = theQDot[:,0]*tauGlobal[:,0]
-powerElb = theQDot[:,1]*tauGlobal[:,1] - theQDot[:,0]*tauGlobal[:,1]
-powers = [powerSho,powerElb]
-return tauLocal,tauGlobal, powers
+  powerSho = theQDot[:,0]*tauGlobal[:,0]
+  powerElb = theQDot[:,1]*tauGlobal[:,1] - theQDot[:,0]*tauGlobal[:,1]
+  powers = [powerSho,powerElb]
+  return tauLocal,tauGlobal, powers
 
 # def deriveLocalEOM():
 # syms m1 m2 m3 m4 I1 I2 I3 I4 l1 l3 cx1 ca1 cx2 ca2 cx3 ca3 cx4 ca4 Q25 g Imot1 Imot2 cHandMass mHandMass IHandMass real

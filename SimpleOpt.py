@@ -399,12 +399,13 @@ class SimpleModel:
       opti.subject_to(oP.dqdt[:,theN/2]   == 0)
 
     else:
-      initAndEndZeros(opti,[oP.dqdt,oP.ddudt2,oP.ddqdt2,pddu,nddu])
-      opti.subject_to(oP.ddqdt2[:,-2] == 0)
+      initAndEndZeros(opti,[oP.dqdt,oP.ddudt2,oP.ddqdt2,pddu,nddu]) # be careful here.
+      opti.subject_to(oP.ddqdt2[:,-2] == 0)                         # 2022-11. here we are accounting for hermite-simpson using fwd-estimates. 
       opti.subject_to(oP.q[:,0]   == oP.qstart)
       opti.subject_to(oP.q[:,-1]  == oP.qend)
     
     #### OBJECTIVE ##### 
+    # this cost is per movement. We intergrate across time to get joules. 
     oP.costTime  = oP.time[-1] * oP.timeValuation
     oP.kWork     = theWorkCoef
     oP.costWork  = oP.kWork * (trapInt(oP.time,oP.pPower[0,:]) +\
@@ -832,7 +833,10 @@ class SimpleModel:
     theFRCoef         = 8.5e-2, 
     theTimeValuation  = 1, 
     theDuration       = [], #if empty, we are optimizing for duration. 
-    theDurationGuess  = .5):
+    theDurationGuess  = .5,
+    gt1lt0            = 1,
+    theKWork          = 4.2,
+    theDiscreteOrCont = 'discrete'):
 
     opti = ca.Opti()
     # all opti variables will be attached to the oP instance of optiParam
@@ -847,14 +851,15 @@ class SimpleModel:
     # Force rate
     oP.ddudt2        = opti.variable(self.DoF, theN+1)
     # slack variables
-    slackVars     = opti.variable(self.DoF*3, theN+1)  #fully-actuated, constrain 1:fr_p, 2:fr_n, 3:power_p.
+    slackVars        = opti.variable(self.DoF*3, theN+1)  #fully-actuated, constrain 1:fr_p, 2:fr_n, 3:power_p.
+    
     # parameters: these can change from opt to opt
     oP.qstart        = opti.parameter(self.DoF,1)
     oP.yBoundary     = opti.parameter(1,1)
     oP.timeValuation = opti.parameter()
     opti.set_value(oP.timeValuation, theTimeValuation)
     oP.kFR           = opti.parameter()
-    oP.kWork         = 4.2
+    oP.kWork         = theKWork
     opti.set_value(oP.kFR, theFRCoef)
     ###/
     
@@ -875,7 +880,7 @@ class SimpleModel:
     oP.time = ca.linspace(0., oP.duration, theN+1)  # Discretized time vector
     ###/
 
-    # extract columns of Q for handiness.
+    ### extract columns of Q for handiness.
     # position
     oP.q    = oP.Q[0:2,:]
     q1      = oP.Q[0, :]
@@ -888,7 +893,7 @@ class SimpleModel:
     oP.dudt = oP.Q[6:8,:]
     # /extraction
 
-    # Calculus equation constraint
+    ### Calculus equation constraint
     def qd(qi, ui,acc): return ca.vertcat(qi[2], qi[3], acc[0], acc[1], qi[6],qi[7],ui[0],ui[1])  # dq/dt = f(q,u)
     # Loop over discrete nodes and enforce calculus constraints. 
     HermiteSimpsonImplicit(opti,qd,self.implicitEOMQ,oP.Q,oP.ddqdt2,oP.ddudt2,dt,[2,3])
@@ -929,11 +934,40 @@ class SimpleModel:
         for dof in range(0,var.shape[0]):
           opti.subject_to(var[dof,0] == 0.0)
           opti.subject_to(var[dof,-1] == 0.0)
-    initAndEndZeros(opti,[oP.dqdt,oP.u,oP.ddudt2,oP.ddqdt2,pddu,nddu])
     
-    opti.subject_to(oP.q[:,0] == oP.qstart)
-    xyEnd = self.joints2EndpointSymbolic(oP.q[:,-1])
-    opti.subject_to(xyEnd[1] >= oP.yBoundary)
+    def initAndEndMatch(opti:ca.Opti, thelist):
+        for var in thelist:
+          for dof in range(0, var.shape[0]):
+            opti.subject_to(var[dof,0] == var[dof,-1])
+  
+    # discrete or continuous
+    oP.discreteOrCont = theDiscreteOrCont
+    if oP.discreteOrCont == 'continuous':
+      initAndEndZeros(opti,[oP.dqdt])                                     #this may be dubious. 
+      initAndEndMatch(opti,[oP.u, oP.ddudt2, pddu, nddu])  
+      opti.subject_to(oP.q[:,0]           == oP.qstart)
+      opti.subject_to(oP.q[:,-1]          == oP.qstart)
+      opti.subject_to(oP.dqdt[:,theN/2]   == 0)                           # this may be dubious.
+
+      # continuous constraints, specific to noX start.                    
+      xyEnd = self.joints2EndpointSymbolic(oP.q[:,theN/2])
+      if gt1lt0:
+        opti.subject_to(xyEnd[1] >= oP.yBoundary)
+      else:
+        print("set the boundary such that yEnd must be less than the boundary.")
+        opti.subject_to(xyEnd[1] <= oP.yBoundary)
+
+    else:
+      initAndEndZeros(opti,[oP.dqdt, oP.ddudt2, oP.ddqdt2, pddu, nddu])   # be careful here.
+      opti.subject_to(oP.ddqdt2[:,-2] == 0)                               # 2022-11. here we are accounting for hermite-simpson using fwd-estimates. 
+      opti.subject_to(oP.q[:,0]       == oP.qstart)
+      xyEnd = self.joints2EndpointSymbolic(oP.q[:,theN])
+      if gt1lt0:
+        opti.subject_to(xyEnd[1] >= oP.yBoundary)
+      else:
+        print("set the boundary such that yEnd must be less than the boundary.")
+        opti.subject_to(xyEnd[1] <= oP.yBoundary)
+    
 
     ############################################################################################################################################
     ############## OBJECTIVE ############## 
