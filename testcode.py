@@ -16,7 +16,7 @@ import plotpresentlib as pp
 #0.0560    0.1120     0.1680    0.2240    0.2800
 distcolors = pp.bluegreen(4)
 
-sim = reaching.DoublePendulum()
+sim = reaching.Kinarm()
 #%config InlineBackend.figure_formats = ['svg']
 
 timeVal = 5

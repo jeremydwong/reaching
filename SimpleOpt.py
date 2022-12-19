@@ -1,3 +1,11 @@
+# SimpleOpt.py
+"""Python module demonstrates passing MATLAB types to Python functions"""
+
+def search(words):
+    """Return list of words containing 'son'"""
+    newlist = [w for w in words if 'son' in w]
+    return newlist
+
 # SimpleModel structure
 #%%
 import casadi as ca
@@ -10,7 +18,6 @@ import scipy.interpolate
 from matplotlib import animation as animate
 from IPython import display
 
-
 class optTrajectories:
   mechPower = np.array([0])
   Q         = np.array([0])
@@ -21,6 +28,7 @@ class optTrajectories:
   uraterate = np.array([0])
   hand      = np.array([0])
 
+  distance      = 0
   solved        = 0
   costJ         = 0
   costFR        = 0
@@ -123,6 +131,8 @@ class optiParam:
   costJ = []          # objective value, typically J = Energy(work,costFR*frr) + timeValuation*Duration
   costWork = []       # cost Work
   costFR = []         # cost FR
+  costU2 = []         # cost U2
+  costdTorque = []    # cost dTorque
   costTime = []       # cost Time
   timeValuation = []  # coefficient to convert time to Joules.
   parameter_names = []# unused
@@ -130,6 +140,7 @@ class optiParam:
   mechPower = []      # mechanical power
   pPower = []         # positive power
   time = []           # time vector.
+  optFR1U2dT3 = 1
   discreteOrCont = [] # yes. is the movement discrete endpoint to endpoint, or cyclic? 
 
   def __init__(self,optiIn:ca.Opti, N:int):
@@ -301,11 +312,12 @@ class SimpleModel:
     theDuration       = [], #if empty, we are optimizing for duration. 
     theDurationGuess  = .5,
     theHandMass       = 0.0,
-    discreteOrCont    = 'discrete') -> optiParam:
+    discreteOrCont    = 'discrete',
+    costFR1U22TR3     = 1) -> optiParam:
 
     #### the casadi instance of Opti helper class. 
     opti = ca.Opti()
-    oP   = optiParam(opti, N = theN) # we attach all symbolic opt variables to oP, to be returned.
+    oP   = optiParam(opti, N = theN) # we attach all opt variables to oP, to be returned.
     
     #### STATE (Q), Acceleration (ddqdt2), force-rate-rate
     oP.Q         = opti.variable(self.DoF*4, theN+1)      # big-Q
@@ -399,8 +411,9 @@ class SimpleModel:
       opti.subject_to(oP.dqdt[:,theN/2]   == 0)
 
     else:
-      initAndEndZeros(opti,[oP.dqdt,oP.ddudt2,oP.ddqdt2,pddu,nddu]) # be careful here.
-      opti.subject_to(oP.ddqdt2[:,-2] == 0)                         # 2022-11. here we are accounting for hermite-simpson using fwd-estimates. 
+      initAndEndZeros(opti,[oP.dqdt,oP.dudt,oP.ddudt2,oP.ddqdt2,pddu,nddu]) # be careful here.
+      opti.subject_to(oP.ddqdt2[:,-2] == 0) # 2022-11. here we are accounting for hermite-simpson using fwd-estimates. 
+      opti.subject_to(oP.dudt[:,-2] == 0) # 2022-11. here we are accounting for hermite-simpson using fwd-estimates. 
       opti.subject_to(oP.q[:,0]   == oP.qstart)
       opti.subject_to(oP.q[:,-1]  == oP.qend)
     
@@ -414,7 +427,17 @@ class SimpleModel:
                                trapInt(oP.time, pddu[1,:]) -\
                                trapInt(oP.time, nddu[0,:]) -\
                                trapInt(oP.time, nddu[1,:]))
-    oP.costJ     = oP.costTime + oP.costWork + oP.costFR
+    
+    oP.costU2       = 1e-3 * trapInt(oP.time, ca.sum2(oP.u * oP.u))
+    oP.costdTorque  = 1e-4 * trapInt(oP.time, ca.sum2(oP.dudt * oP.dudt))
+    if costFR1U22TR3 == 1:
+      oP.costJ     = oP.costTime + oP.costWork + oP.costFR
+    elif costFR1U22TR3 == 2:
+      oP.optFR1U2dT3 = 2
+      oP.costJ     = oP.costTime + oP.costWork + oP.costU2
+    elif costFR1U22TR3 == 3:
+      oP.optFR1U2dT3 = 3
+      oP.costJ    = oP.costTime + oP.costWork + oP.costdTorque
     # Set cost function
     opti.minimize(oP.costJ)
 
@@ -540,6 +563,7 @@ class SimpleModel:
       optTraj.handspeed = handspeed_opt
       peakhandspeed = max(handspeed_opt)
       optTraj.peakhandspeed = peakhandspeed
+      
       ### /compute peak handspeed and peak speed
       
       hand_opt = np.zeros([2,optTraj.Q.shape[1]])
@@ -548,6 +572,8 @@ class SimpleModel:
         hand_opt[:,i] = self.joints2Endpoint(qtemp)
       optTraj.hand = hand_opt
       
+      optTraj.distance = np.sqrt((hand_opt[0,0]-hand_opt[0,-1])**2+ \
+        (hand_opt[1,0]-hand_opt[1,-1])**2)
 
       # plot
       if theGeneratePlots:

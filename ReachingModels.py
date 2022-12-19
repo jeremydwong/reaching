@@ -243,8 +243,8 @@ class Kinarm(so.SimpleModel):
         self.l[0]*ca.sin(q[0])+self.l[1]*ca.sin(q[0]+q[1])])
 
   def joints2EndpointSymbolic(self,q):
-    return ca.vertcat(self.l[0]*ca.cos(q[0])+self.l[1]*ca.cos(q[1]),
-            self.l[0]*ca.sin(q[0])+self.l[1]*ca.sin(q[1]))
+    return ca.vertcat(self.l[0]*ca.cos(q[0])+self.l[1]*ca.cos(q[0]+q[1]),
+            self.l[0]*ca.sin(q[0])+self.l[1]*ca.sin(q[0]+q[1]))
 
   def heightsMasses(self,q):
     q1 = q[0]
@@ -324,6 +324,258 @@ class Kinarm(so.SimpleModel):
     ang1 = angles[1:2,:] + angles[0:1,:]
 
     return ca.vertcat(ang0,ang1)
+
+class KinarmGlobal(so.SimpleModel):
+  DoF = 2
+  NActuators = 2
+  NBodies = 7
+  g= 0.0
+  parms = dict()
+
+  m1 = 0
+  m2 = 0
+  m3 = 0
+  m4 = 0
+
+  I1 = 0
+  I2 = 0
+  I3 = 0
+  I4 = 0
+
+  l1 = 0
+  l3 = 0
+  cx1 = 0
+  ca1 = 0
+  cx1 = 0
+  ca2 = 0
+  cx3 = 0
+  ca3 = 0
+  cx4 = 0
+  ca4 = 0
+  Q25 = 0
+
+  # def __init__ -> Kinarm(fname)
+  # input (optional): location of .mat param file.
+  # output: class that has parameters set according to the file.
+  def __init__(self,fname='paramsKinarmValidated80KgSubj.mat'):
+    kinarmPath = os.path.dirname(so.__file__)
+    self.parms = io.loadmat(kinarmPath + '/parameterFiles/' + fname) #load test data (change path)
+
+    self.m1 = self.parms["L1_M"].flatten()[0]
+    self.m2 = self.parms["L2_M"].flatten()[0]
+    self.m3 = self.parms["L3_M"].flatten()[0]
+    self.m4 = self.parms["L4_M"].flatten()[0]
+    self.mHandMass = 0.0
+    self.m = [self.m1,self.m2,self.m3,self.m4,0.0,0.0,self.mHandMass]
+    self.I1 = self.parms["L1_I"].flatten()[0]
+    self.I2 = self.parms["L2_I"].flatten()[0]
+    self.I3 = self.parms["L3_I"].flatten()[0]
+    self.I4 = self.parms["L4_I"].flatten()[0]
+    self.Imot1 = 0.001
+    self.Imot2 = 0.001
+    self.I = [self.I1,self.I2,self.I3,self.I4,self.Imot1,self.Imot2,0.0]
+
+    self.l1 = self.parms["L1_L"].flatten()[0]
+    self.l3 = self.parms["L3_L"].flatten()[0]
+    self.l2 = self.parms["L2_L"] .flatten()[0]
+    self.l = np.array([self.l1,self.l2])
+    self.cx1 = self.parms["L1_C_AXIAL"].flatten()[0]
+    self.ca1 = self.parms["L1_C_ANTERIOR"].flatten()[0]
+    self.cx2 = self.parms["L2_C_AXIAL"].flatten()[0]
+    self.ca2 = self.parms["L2_C_ANTERIOR"].flatten()[0]
+    self.cx3 = self.parms["L3_C_AXIAL"].flatten()[0]
+    self.ca3 = self.parms["L3_C_ANTERIOR"].flatten()[0]
+    self.cx4 = self.parms["L4_C_AXIAL"].flatten()[0]
+    self.ca4 = self.parms["L4_C_ANTERIOR"].flatten()[0]
+    self.Q25 = self.parms["L2_L5_ANGLE"].flatten()[0]
+    
+    self.cHandMass = self.l2 #distance along the forearm where the mass is located.
+    self.IHandMass = 0
+
+  # def implicitJointEOM(self, q, qdot, torques, qdotdot):
+  # inputs: states q, dqdt, torques u, accelerations acc.
+  # outputs: errors in the contraint equations F - m*a = 0
+  # note that we are using JOINT ANGLES (not external-reference-frame segment angles) 
+  # which gives us the intuitive mass matrix
+  def implicitEOM(self, q, qdot, u, qdotdot):
+    q1 = q[0]
+    q2 = q[1]
+    q1dot = qdot[0]
+    q2dot = qdot[1]
+    M11 = self.I1 + self.I4 + self.Imot1 + self.ca1**2*self.m1 + self.ca4**2*self.m4 + self.cx1**2*self.m1 + \
+      self.cx4**2*self.m4 + self.l1**2*self.m2 + self.l1**2*self.mHandMass
+
+    M12 = self.cx2*self.l1*self.m2*ca.cos(q1 - q2) - self.ca4*self.l3*self.m4*ca.sin(self.Q25 + q1 - q2) + \
+      self.cHandMass*self.l1*self.mHandMass*ca.cos(q1 - q2) + self.ca2*self.l1*self.m2*ca.sin(q1 - q2) + \
+        self.cx4*self.l3*self.m4*ca.cos(self.Q25 + q1 - q2)
+
+    M21 = M12 #symmetric mass matrix via virtual power
+
+    M22 = self.mHandMass*self.cHandMass**2 + self.m2*self.ca2**2 + self.m3*self.ca3**2 + self.m2*self.cx2**2 + self.m3*self.cx3**2 + \
+      self.m4*self.l3**2 + self.I2 + self.I3 + self.IHandMass + self.Imot2
+
+    F1 =  -q2dot**2*(self.cx4*self.l3*self.m4*ca.sin(self.Q25 + q1 - q2) - self.ca2*self.l1*self.m2*ca.cos(q1 - q2) + \
+      self.cx2*self.l1*self.m2*ca.sin(q1 - q2) + self.cHandMass*self.l1*self.mHandMass*ca.sin(q1 - q2) + self.ca4*self.l3*self.m4*ca.cos(self.Q25 + q1 - q2))
+
+    F2 = q1dot**2*(self.cx4*self.l3*self.m4*ca.sin(self.Q25 + q1 - q2) - self.ca2*self.l1*self.m2*ca.cos(q1 - q2) + self.cx2*self.l1*self.m2*ca.sin(q1 - q2) + \
+      self.cHandMass*self.l1*self.mHandMass*ca.sin(q1 - q2) + self.ca4*self.l3*self.m4*ca.cos(self.Q25 + q1 - q2))
+
+    #MassMat = np.array([[M11,M12],[M21,M22]]) M*qdotdot = F
+    e1 = M11*qdotdot[0]+M12*qdotdot[1] - F1 - u[0] + u[1]
+    e2 = M21*qdotdot[0]+M22*qdotdot[1] - F2 - u[1]
+    return ca.vertcat(e1,e2)
+
+  def inverseDynamics(self, q, qdot, qdotdot):
+    q1 = q[0]
+    q2 = q[1]
+    q1dot = qdot[0]
+    q2dot = qdot[1]
+    M11 = self.I1 + self.I4 + self.Imot1 + self.ca1**2*self.m1 + self.ca4**2*self.m4 + self.cx1**2*self.m1 + \
+      self.cx4**2*self.m4 + self.l1**2*self.m2 + self.l1**2*self.mHandMass
+
+    M12 = self.cx2*self.l1*self.m2*ca.cos(q1 - q2) - self.ca4*self.l3*self.m4*ca.sin(self.Q25 + q1 - q2) + \
+      self.cHandMass*self.l1*self.mHandMass*ca.cos(q1 - q2) + self.ca2*self.l1*self.m2*ca.sin(q1 - q2) + \
+        self.cx4*self.l3*self.m4*ca.cos(self.Q25 + q1 - q2)
+
+    M21 = M12 #symmetric mass matrix via virtual power
+
+    M22 = self.mHandMass*self.cHandMass**2 + self.m2*self.ca2**2 + self.m3*self.ca3**2 + self.m2*self.cx2**2 + self.m3*self.cx3**2 + \
+      self.m4*self.l3**2 + self.I2 + self.I3 + self.IHandMass + self.Imot2
+
+    F1 =  -q2dot**2*(self.cx4*self.l3*self.m4*ca.sin(self.Q25 + q1 - q2) - self.ca2*self.l1*self.m2*ca.cos(q1 - q2) + \
+      self.cx2*self.l1*self.m2*ca.sin(q1 - q2) + self.cHandMass*self.l1*self.mHandMass*ca.sin(q1 - q2) + self.ca4*self.l3*self.m4*ca.cos(self.Q25 + q1 - q2))
+
+    F2 = q1dot**2*(self.cx4*self.l3*self.m4*ca.sin(self.Q25 + q1 - q2) - self.ca2*self.l1*self.m2*ca.cos(q1 - q2) + self.cx2*self.l1*self.m2*ca.sin(q1 - q2) + \
+      self.cHandMass*self.l1*self.mHandMass*ca.sin(q1 - q2) + self.ca4*self.l3*self.m4*ca.cos(self.Q25 + q1 - q2))
+    
+    #MassMat = np.array([[M11,M12],[M21,M22]])
+    u = np.zeros([2,1])
+    u[1] = M21*qdotdot[0]+M22*qdotdot[1] - F2
+    u[0] = M11*qdotdot[0]+M12*qdotdot[1] - F1 + u[1]
+    return u
+
+  # def implicitJointEOMQ(self, Q, acc):
+  # inputs: stacked states Q [positions;velocities;torques!;torquerate]
+  # outputs: errors in the 0 constraint equation F - m*a = 0
+  def implicitEOMQ(self, Q, acc):
+    return self.implicitEOM(Q[0:2],Q[2:4],Q[4:6],acc)
+  
+  # def kinematicJacobianInertias(self, q):
+  # inputs: joint angles q
+  # returns: a list of nq x nq matrices of the linear jacobians for inertias in this model.
+  def kinematicJacobianInertias(self, q):
+    q1 = q[0]
+    q2 = q[1]
+    j_1 = [[- self.ca1*ca.cos(q1) - self.cx1*ca.sin(q1), 0],[  self.cx1*ca.cos(q1) - self.ca1*ca.sin(q1), 0]]
+    j_2 = [[-self.l1*ca.sin(q1), - self.ca2*ca.cos(q2) - self.cx2*ca.sin(q2)],[ self.l1*ca.cos(q1),   self.cx2*ca.cos(q2) - self.ca2*ca.sin(q2)]]  
+    j_3 = [[0, self.cx3*ca.sin(self.Q25 - q2) - self.ca3*ca.cos(self.Q25 - q2)],[0, self.cx3*ca.cos(self.Q25 - q2) + self.ca3*ca.sin(self.Q25 - q2)]]
+    j_4 = [[- self.ca4*ca.cos(q1) - self.cx4*ca.sin(q1), self.l3*ca.sin(self.Q25 - q2)],[  self.cx4*ca.cos(q1) - self.ca4*ca.sin(q1), self.l3*ca.cos(self.Q25 - q2)]]
+    j_mot1 = [[0, 0],\
+      [0, 0]]
+    j_mot2 = [[0, 0],\
+      [0, 0]]
+    j_handMass = [[-self.l1*ca.sin(q1), -self.cHandMass*ca.sin(q2)],[ self.l1*ca.cos(q1),  self.cHandMass*ca.cos(q2)]]
+    return [j_1, j_2, j_3, j_4, j_mot1, j_mot2, j_handMass]
+
+  # def kinematicJacobianRotationalInertias(self):
+  # input: ~
+  # output: matrix to compute inertial-frame angular velocites. 
+  def kinematicJacobianRotationalInertias(self):
+    r1 = np.array([[1,0],[0,0]])
+    r2 = np.array([[0,1],[0,0]])
+    r3 = np.array([[0,1],[0,0]])
+    r4 = np.array([[1,0],[0,0]])
+    r5 = np.array([[1,0],[0,0]])
+    r6 = np.array([[0,1],[0,0]])
+    r7 = np.array([[0,1],[0,0]])
+    return [r1,r2,r3,r4,r5,r6,r7]
+
+  def joints2Endpoint(self, q):
+      return np.array([self.l[0]*ca.cos(q[0])+self.l[1]*ca.cos(q[1]),
+        self.l[0]*ca.sin(q[0])+self.l[1]*ca.sin(q[1])])
+
+  def joints2EndpointSymbolic(self,q):
+    return ca.vertcat(self.l[0]*ca.cos(q[0])+self.l[1]*ca.cos(q[1]),
+            self.l[0]*ca.sin(q[0])+self.l[1]*ca.sin(q[1]))
+
+  def heightsMasses(self,q):
+    q1 = q[0]
+    q2 = q[1]
+    h1 = self.ca1*np.cos(q1) + self.cx1*np.sin(q1)
+    h2 = self.ca2*np.cos(q2) + self.cx2*np.sin(q2) + self.l1*np.sin(q1)
+    h3 = self.ca3*np.cos(- self.Q25 + q2) + self.cx3*np.sin(- self.Q25 + q2)
+    h4 = self.l3*np.sin(- self.Q25 + q2) + self.ca4*np.cos(q1) + self.cx4*np.sin(q1)
+    h5 = 0
+    h6 = 0
+    h7 = self.cHandMass*np.sin(q2) + self.l1*np.sin(q1)
+    return [h1,h2,h3,h4,h5,h6,h7]
+
+  def jointPower(self,qdot, u):
+    return ca.vertcat(qdot[0:1,:]*u[0:1,:], qdot[1:2,:]*u[1:2,:] - qdot[0:1,:]*u[1:2,:])
+
+  def xy2joints(self, xy):
+    x=xy[0]
+    y=xy[1]
+    l1 = self.l1
+    l2 = self.l2
+    c = np.sqrt(x**2+y**2)
+    gamma = np.arctan2(y,x)
+    beta = np.arccos((l1**2+c**2-l2**2)/(2*l1*c))
+    q1 = gamma - beta
+    elb = np.arccos((l2**2+l1**2-c**2)/(2*l2*l1))
+    q2 = np.pi - (elb-q1)
+    out = np.array([q1,q2])
+    if sum(np.isnan(out)) > 0:
+      print("Warning! this hand position is unreachable given l1 and l2. Nans returned.")
+    return out
+  
+  # kinematic jacobian endpoint is change in endpoint for change in q. 
+  def kinematicJacobianEndpoint(self, q):
+    l1 = self.l[0]
+    l2 = self.l[1]
+    kinJac = np.array([[ -l1*np.sin(q[0]), -l2*np.sin(q[1])],\
+        [l1*np.cos(q[0]),  l2*np.cos(q[1])]])
+    return kinJac
+
+  def handspeed(self, q, qdot):
+    hvel = self.kinematicJacobianEndpoint(q) @ qdot
+    htan = np.sqrt(hvel[0]**2+hvel[1]**2)
+    return htan, hvel
+
+  #def tauGlob2Loc(tauGlob):
+  # input: 'global' segment torques
+  # output: 'local' joint torques
+  def tauGlob2Loc(self,tauGlob):
+  #tauLoc = tauGlob2Loc(tauGlob)
+    JacLoc2Glob = np.array([[1,0],[1,1]])
+    tauLoc = JacLoc2Glob.T @ tauGlob
+    return tauLoc 
+        
+  # def tauLoc2Glob(tauLoc):
+  # input: local joint torques
+  # output: global segment torques
+  def tauLoc2Glob(self,tauLoc):
+    #function tauGlob = tauLoc2Glob(tauLoc)        
+    JacGlob2Loc = np.array([[1,0],[-1,1]])
+    tauGlob = JacGlob2Loc.T @ tauLoc
+    return tauGlob
+
+  def setHandMass(self, inM = 0.0):
+    self.mHandMass = inM
+
+  @staticmethod
+  def segment2joint(angles):
+    ang0 = angles[0:1,:]
+    ang1 = angles[1:2,:] - angles[0:1,:]
+    return ca.vertcat(ang0,ang1)
+  
+  @staticmethod
+  def joint2segment(angles):
+    ang0 = angles[0:1,:]
+    ang1 = angles[1:2,:] + angles[0:1,:]
+
+    return ca.vertcat(ang0,ang1)
+
 
 class DoublePendulum(so.SimpleModel):
   DoF = 2
