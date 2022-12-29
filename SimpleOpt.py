@@ -141,6 +141,8 @@ class optiParam:
   pPower = []         # positive power
   time = []           # time vector.
   optFR1U2dT3 = 1
+  kU2 = 1e-3
+  kdTorque = 1e-4
   discreteOrCont = [] # yes. is the movement discrete endpoint to endpoint, or cyclic? 
 
   def __init__(self,optiIn:ca.Opti, N:int):
@@ -312,8 +314,10 @@ class SimpleModel:
     theDuration       = [], #if empty, we are optimizing for duration. 
     theDurationGuess  = .5,
     theHandMass       = 0.0,
-    discreteOrCont    = 'discrete',
-    costFR1U22TR3     = 1) -> optiParam:
+    thediscreteOrCont    = 'discrete',
+    thecostFR1U22TR3     = 1,
+    theku2            = 1e-3,
+    thekdtor          = 1e-4) -> optiParam:
 
     #### the casadi instance of Opti helper class. 
     opti = ca.Opti()
@@ -401,8 +405,8 @@ class SimpleModel:
             opti.subject_to(var[dof,0] == var[dof,-1])
     
     # discrete or continuous
-    oP.discreteOrCont = discreteOrCont
-    if discreteOrCont == 'continuous':
+    oP.discreteOrCont = thediscreteOrCont
+    if thediscreteOrCont == 'continuous':
       initAndEndZeros(opti,[oP.dqdt])
       initAndEndMatch(opti,[oP.u, oP.ddudt2, pddu, nddu])  
       opti.subject_to(oP.q[:,0]           == oP.qstart)
@@ -427,16 +431,18 @@ class SimpleModel:
                                trapInt(oP.time, pddu[1,:]) -\
                                trapInt(oP.time, nddu[0,:]) -\
                                trapInt(oP.time, nddu[1,:]))
-    
-    oP.costU2       = 1e-3 * trapInt(oP.time, ca.sum2(oP.u * oP.u))
-    oP.costdTorque  = 1e-4 * trapInt(oP.time, ca.sum2(oP.dudt * oP.dudt))
-    if costFR1U22TR3 == 1:
+    oP.kU2          = theku2
+    oP.costU2       = oP.kU2 * (trapInt(oP.time, (oP.u[0,:] * oP.u[0,:]))+
+                        trapInt(oP.time, (oP.u[1,:] * oP.u[1,:])))
+    oP.kdTorque     = thekdtor
+    oP.costdTorque  = oP.kdTorque * (trapInt(oP.time, (oP.dudt[0,:] * oP.dudt[0,:])) +
+                        trapInt(oP.time, (oP.dudt[1,:] * oP.dudt[1,:])))
+    oP.optFR1U2dT3  = thecostFR1U22TR3
+    if oP.optFR1U2dT3  == 1:
       oP.costJ     = oP.costTime + oP.costWork + oP.costFR
-    elif costFR1U22TR3 == 2:
-      oP.optFR1U2dT3 = 2
+    elif oP.optFR1U2dT3  == 2:
       oP.costJ     = oP.costTime + oP.costWork + oP.costU2
-    elif costFR1U22TR3 == 3:
-      oP.optFR1U2dT3 = 3
+    elif oP.optFR1U2dT3  == 3:
       oP.costJ    = oP.costTime + oP.costWork + oP.costdTorque
     # Set cost function
     opti.minimize(oP.costJ)
@@ -484,6 +490,14 @@ class SimpleModel:
     opti.set_value(oP.qend,           qCON1)
     opti.set_value(oP.timeValuation,  theTimeValuation)
     opti.set_value(oP.kFR,            theFRCoef)
+
+    if (oP.optFR1U2dT3  == 1):
+      oP.costJ     = oP.costTime + oP.costWork + oP.costFR
+    elif (oP.optFR1U2dT3  == 2):
+      oP.costJ     = oP.costTime + oP.costWork + oP.costU2
+    elif (oP.optFR1U2dT3  == 3):
+      oP.costJ    = oP.costTime + oP.costWork + oP.costdTorque
+    opti.minimize(oP.costJ)
 
     # now update the time for guesses of the decision variables.
     if type(oP.duration) == float:
